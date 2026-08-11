@@ -1,10 +1,19 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use hivemind_gateway::AppState;
+use hivemind_gateway::db;
 use tower::ServiceExt;
+
+async fn test_pool() -> sqlx::PgPool {
+    let url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://gateway:gateway@127.0.0.1:5433/gateway".to_string());
+    db::connect(&url).await.expect("connect to test postgres")
+}
 
 #[tokio::test]
 async fn healthz_returns_ok() {
-    let app = hivemind_gateway::app();
+    let pool = test_pool().await;
+    let app = hivemind_gateway::app(AppState { pool });
     let resp = app
         .oneshot(
             Request::builder()
