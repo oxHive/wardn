@@ -119,6 +119,24 @@ pub async fn update_role(
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // `roles::set_role_permissions` is keyed only on `role_id` and doesn't
+    // check the role exists (Task 2), so a nonexistent or wrong-org
+    // `role_id` would otherwise silently succeed with 204. Check existence,
+    // scoped to this org, before applying the update.
+    let exists: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
+            .bind(role_id)
+            .bind(org_id)
+            .fetch_optional(&state.pool)
+            .await;
+    match exists {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("update role existence check failed: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
     match roles::set_role_permissions(&state.pool, role_id, &permissions).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {

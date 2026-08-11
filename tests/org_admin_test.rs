@@ -206,6 +206,27 @@ async fn update_role_replaces_its_permissions() {
 }
 
 #[tokio::test]
+async fn update_role_returns_404_for_an_unknown_role_id() {
+    let pool = test_pool().await;
+    let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/orgs/{org_id}/roles/{}", Uuid::new_v4()))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"permissions":["db:sync"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn delete_role_rejects_a_role_still_in_use() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
