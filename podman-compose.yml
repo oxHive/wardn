@@ -6,11 +6,17 @@ services:
       POSTGRES_USER: gateway
       POSTGRES_PASSWORD: gateway
       POSTGRES_DB: gateway
+    # Bound to loopback only: these are unauthenticated-by-default dev
+    # services. Publishing without a bind address exposes them on every
+    # interface.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
   sqld:
     image: ghcr.io/tursodatabase/libsql-server:latest
     command: ["sqld", "--http-listen-addr=0.0.0.0:8080", "--enable-namespaces", "--admin-listen-addr=0.0.0.0:8090"]
+    # sqld has no authentication of its own here, and its admin API can
+    # create/delete any namespace with zero credentials — anything that can
+    # reach these ports bypasses the gateway entirely. Loopback only.
     ports:
-      - "8081:8080"
-      - "8090:8090"
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:8090:8090"
