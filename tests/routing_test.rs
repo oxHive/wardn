@@ -13,6 +13,10 @@ async fn test_pool() -> sqlx::PgPool {
     db::connect(&url).await.expect("connect to test postgres")
 }
 
+fn test_sqld_url() -> String {
+    std::env::var("SQLD_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
+}
+
 async fn whereami(
     axum::extract::State(state): axum::extract::State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -24,10 +28,10 @@ fn test_app(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/whereami", get(whereami))
         .layer(axum::middleware::from_fn_with_state(
-            AppState { pool: pool.clone() },
+            AppState::new(pool.clone(), test_sqld_url()),
             auth::auth_middleware,
         ))
-        .with_state(AppState { pool })
+        .with_state(AppState::new(pool, test_sqld_url()))
 }
 
 async fn seed_valid_key(pool: &sqlx::PgPool, owner_type: &str, owner_id: Uuid) -> String {

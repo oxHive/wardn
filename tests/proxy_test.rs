@@ -1,5 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use base64::Engine as _;
 use hivemind_gateway::auth::{self, AppState};
 use hivemind_gateway::db;
 use tower::ServiceExt;
@@ -9,6 +10,10 @@ async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://gateway:gateway@127.0.0.1:5433/gateway".to_string());
     db::connect(&url).await.expect("connect to test postgres")
+}
+
+fn test_sqld_url() -> String {
+    std::env::var("SQLD_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
 }
 
 fn admin_url() -> String {
@@ -139,7 +144,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
     .await
     .unwrap();
 
-    let state = AppState { pool };
+    let state = AppState::new(pool, test_sqld_url());
     let app = hivemind_gateway::app(state);
 
     // sqld exposes a version endpoint at GET /version on its default HTTP
@@ -192,7 +197,7 @@ async fn namespace_isolation_through_full_router() {
     let secret_a = format!("A-secret-{owner_a_id}");
     let secret_b = format!("B-secret-{owner_b_id}");
 
-    let app = hivemind_gateway::app(AppState { pool });
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
 
     // Owner A creates their table and writes their secret.
     let create_and_insert_a = format!(
@@ -240,10 +245,95 @@ async fn namespace_isolation_through_full_router() {
     delete_namespace(&http, &namespace_b).await;
 }
 
+/// Sends a query through the gateway with attacker-chosen extra headers.
+async fn query_with_headers(
+    app: axum::Router,
+    full_key: &str,
+    statements_json: &str,
+    extra: &[(&str, String)],
+) -> (StatusCode, String) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header(header::AUTHORIZATION, format!("Bearer {full_key}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in extra {
+        builder = builder.header(*name, value);
+    }
+    let resp = app
+        .oneshot(builder.body(Body::from(statements_json.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(body.to_vec()).unwrap())
+}
+
+/// sqld honours a second namespace selector besides `Host`:
+/// `x-namespace-bin`, carrying unpadded base64 of the namespace name — and it
+/// *overrides* `Host`. Verified directly against the container: a request with
+/// `Host: a.local` and `x-namespace-bin: <base64 of b>` reads namespace `b`.
+///
+/// So it is not enough for the gateway to set `Host`; it must also strip and
+/// replace any client-supplied `x-namespace-bin`, or an authenticated tenant
+/// reads any other tenant's database with its own valid key. This test runs
+/// the real attack through the real router and asserts the caller only ever
+/// sees their own data.
+#[tokio::test]
+async fn client_cannot_smuggle_a_namespace_selector() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+
+    let attacker_id = Uuid::new_v4();
+    let victim_id = Uuid::new_v4();
+    let attacker_ns = format!("smug-att-{attacker_id}");
+    let victim_ns = format!("smug-vic-{victim_id}");
+    create_namespace(&http, &attacker_ns).await;
+    create_namespace(&http, &victim_ns).await;
+
+    let attacker_key = seed_owner_with_namespace(&pool, &attacker_ns).await;
+    let victim_key = seed_owner_with_namespace(&pool, &victim_ns).await;
+
+    let victim_secret = format!("VICTIM-{victim_id}");
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+
+    let (status, _) = query_through_gateway(
+        app.clone(),
+        &victim_key,
+        &format!(
+            r#"{{"statements":["CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)","INSERT INTO kv (k, v) VALUES ('x', '{victim_secret}')"]}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "victim's seed write failed");
+
+    // The attacker points every selector they control at the victim.
+    let victim_bin = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&victim_ns);
+    let (_, body) = query_with_headers(
+        app.clone(),
+        &attacker_key,
+        r#"{"statements":["SELECT v FROM kv"]}"#,
+        &[
+            ("x-namespace-bin", victim_bin),
+            (header::HOST.as_str(), format!("{victim_ns}.local")),
+        ],
+    )
+    .await;
+    assert!(
+        !body.contains(&victim_secret),
+        "a client-supplied namespace selector reached another tenant's data: {body}"
+    );
+
+    delete_namespace(&http, &attacker_ns).await;
+    delete_namespace(&http, &victim_ns).await;
+}
+
 #[tokio::test]
 async fn missing_key_never_reaches_sqld() {
     let pool = test_pool().await;
-    let app = hivemind_gateway::app(AppState { pool });
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
     let resp = app
         .oneshot(
             Request::builder()
@@ -279,7 +369,7 @@ async fn valid_key_with_no_mapping_returns_404() {
     .await
     .unwrap();
 
-    let app = hivemind_gateway::app(AppState { pool });
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
     let resp = app
         .oneshot(
             Request::builder()

@@ -13,6 +13,10 @@ async fn test_pool() -> sqlx::PgPool {
     db::connect(&url).await.expect("connect to test postgres")
 }
 
+fn test_sqld_url() -> String {
+    std::env::var("SQLD_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
+}
+
 async fn whoami(Extension(owner): Extension<AuthedOwner>) -> String {
     format!("{}:{}", owner.owner_type, owner.owner_id)
 }
@@ -21,10 +25,10 @@ fn test_app(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/whoami", get(whoami))
         .layer(axum::middleware::from_fn_with_state(
-            AppState { pool: pool.clone() },
+            AppState::new(pool.clone(), test_sqld_url()),
             hivemind_gateway::auth::auth_middleware,
         ))
-        .with_state(AppState { pool })
+        .with_state(AppState::new(pool, test_sqld_url()))
 }
 
 #[tokio::test]
@@ -110,7 +114,13 @@ async fn wrong_key_returns_401() {
         .oneshot(
             Request::builder()
                 .uri("/whoami")
-                .header(header::AUTHORIZATION, format!("Bearer {prefix}wrongsuffixwrongsuffix"))
+                // A token whose *prefix* really is in the database (so the
+                // lookup hits a row) but whose secret half is wrong — this is
+                // the hash-mismatch path, not the unknown-prefix path.
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}{prefix}wrongsuffixwrongsuffix", auth::KEY_MARKER),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

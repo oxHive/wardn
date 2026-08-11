@@ -6,13 +6,55 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rand::Rng;
 use sqlx::PgPool;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::db;
+use crate::proxy::ProxyClient;
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// Base URL of the sqld instance to proxy to, e.g. `http://127.0.0.1:8081`.
+    /// Held here rather than read from the environment inside the handler so
+    /// that it is configured exactly once, in one place, and tests can point
+    /// it wherever they like.
+    pub sqld_url: String,
+    /// Pooled outbound HTTP clients, shared by every request.
+    pub client: ProxyClient,
+}
+
+impl AppState {
+    pub fn new(pool: PgPool, sqld_url: String) -> Self {
+        Self {
+            pool,
+            sqld_url,
+            client: ProxyClient::new(),
+        }
+    }
+}
+
+/// Marker every issued key starts with. The DB lookup prefix is derived from
+/// the *random* part only — including this constant in the prefix would burn
+/// 8 of its characters on a value that is identical for every key.
+pub const KEY_MARKER: &str = "hm_live_";
+
+/// Number of characters of the random part used as the DB lookup prefix.
+/// 16 characters from a 62-symbol alphabet is ~62^16 ≈ 2^95 possibilities, so
+/// the `UNIQUE` constraint on `api_keys.prefix` will never realistically be
+/// hit by an issuance collision.
+const PREFIX_LEN: usize = 16;
+
+/// Derives the `api_keys.prefix` lookup value from a presented bearer token.
+/// Returns `None` for anything that isn't one of our keys, so the caller can
+/// reject it without touching the database.
+pub fn prefix_of(full_key: &str) -> Option<String> {
+    let random_part = full_key.strip_prefix(KEY_MARKER)?;
+    let prefix: String = random_part.chars().take(PREFIX_LEN).collect();
+    if prefix.chars().count() < PREFIX_LEN {
+        return None;
+    }
+    Some(prefix)
 }
 
 /// Generates a new API key. Returns (full_key, prefix, hash) — the caller
@@ -23,8 +65,8 @@ pub fn generate_api_key() -> (String, String, String) {
     let random_part: String = (0..32)
         .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
         .collect();
-    let full_key = format!("hm_live_{random_part}");
-    let prefix = full_key.chars().take(12).collect::<String>();
+    let full_key = format!("{KEY_MARKER}{random_part}");
+    let prefix: String = random_part.chars().take(PREFIX_LEN).collect();
     let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
         .hash_password(full_key.as_bytes(), &salt)
@@ -32,6 +74,18 @@ pub fn generate_api_key() -> (String, String, String) {
         .to_string();
     (full_key, prefix, hash)
 }
+
+/// A real argon2 hash of a fixed throwaway secret, computed once. Used only
+/// to spend the same CPU on the "no such prefix" path as on a genuine
+/// verification (see `auth_middleware`); it can never match a presented key.
+static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
+    let salt = SaltString::from_b64("aGl2ZW1pbmRnYXRld2F5")
+        .expect("static salt is valid base64 of a legal length");
+    Argon2::default()
+        .hash_password(b"not-a-real-api-key", &salt)
+        .expect("argon2 hashing does not fail for well-formed input")
+        .to_string()
+});
 
 pub fn verify_key(full_key: &str, hash: &str) -> bool {
     let Ok(parsed_hash) = PasswordHash::new(hash) else {
@@ -71,7 +125,9 @@ pub async fn auth_middleware(
     let Some(full_key) = auth_header else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let prefix: String = full_key.chars().take(12).collect();
+    let Some(prefix) = prefix_of(full_key) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
 
     let row = match db::find_api_key_by_prefix(&state.pool, &prefix).await {
         Ok(row) => row,
@@ -81,6 +137,10 @@ pub async fn auth_middleware(
         }
     };
     let Some(row) = row else {
+        // Verify against a throwaway hash anyway. Without this, an unknown
+        // prefix returns in microseconds while a known-but-wrong key pays the
+        // full argon2 cost — a timing oracle for "does this prefix exist".
+        let _ = verify_key(full_key, &DUMMY_HASH);
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if row.revoked_at.is_some() {

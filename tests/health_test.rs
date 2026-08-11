@@ -10,10 +10,14 @@ async fn test_pool() -> sqlx::PgPool {
     db::connect(&url).await.expect("connect to test postgres")
 }
 
+fn test_sqld_url() -> String {
+    std::env::var("SQLD_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
+}
+
 #[tokio::test]
 async fn healthz_returns_ok() {
     let pool = test_pool().await;
-    let app = hivemind_gateway::app(AppState { pool });
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
     let resp = app
         .oneshot(
             Request::builder()
