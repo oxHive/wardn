@@ -173,7 +173,21 @@ pub enum DeleteRoleError {
 }
 
 pub async fn delete_role(pool: &PgPool, org_id: Uuid, role_id: Uuid) -> Result<(), DeleteRoleError> {
-    let (in_use,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE role_id = $1")
+    // First, verify the role exists in this org (prevents cross-org info leak)
+    let role_exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
+        .bind(role_id)
+        .bind(org_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(DeleteRoleError::Db)?;
+
+    if role_exists.is_none() {
+        return Err(DeleteRoleError::NotFound);
+    }
+
+    // Now check if it's in use in this org
+    let (in_use,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role_id = $2")
+        .bind(org_id)
         .bind(role_id)
         .fetch_one(pool)
         .await
@@ -181,15 +195,15 @@ pub async fn delete_role(pool: &PgPool, org_id: Uuid, role_id: Uuid) -> Result<(
     if in_use > 0 {
         return Err(DeleteRoleError::InUse);
     }
-    let result = sqlx::query("DELETE FROM roles WHERE id = $1 AND org_id = $2")
+
+    // Delete the role
+    sqlx::query("DELETE FROM roles WHERE id = $1 AND org_id = $2")
         .bind(role_id)
         .bind(org_id)
         .execute(pool)
         .await
         .map_err(DeleteRoleError::Db)?;
-    if result.rows_affected() == 0 {
-        return Err(DeleteRoleError::NotFound);
-    }
+
     Ok(())
 }
 

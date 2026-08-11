@@ -120,8 +120,9 @@ async fn require_permission_rejects_a_non_member() {
 async fn create_role_creates_a_role_with_its_permissions() {
     let pool = test_pool().await;
     let org_id = seed_bare_org(&pool).await;
+    let role_name = format!("analyst-{}", Uuid::new_v4());
 
-    let role_id = roles::create_role(&pool, org_id, "analyst", &[Permission::DbQuery])
+    let role_id = roles::create_role(&pool, org_id, &role_name, &[Permission::DbQuery])
         .await
         .unwrap();
 
@@ -130,7 +131,7 @@ async fn create_role_creates_a_role_with_its_permissions() {
         .iter()
         .find(|r| r.id == role_id)
         .expect("role should exist");
-    assert_eq!(created.name, "analyst");
+    assert_eq!(created.name, role_name);
     assert_eq!(created.permissions, vec!["db:query".to_string()]);
 }
 
@@ -162,7 +163,8 @@ async fn set_role_permissions_replaces_the_permission_set() {
 async fn delete_role_removes_an_unused_role() {
     let pool = test_pool().await;
     let org_id = seed_bare_org(&pool).await;
-    let role_id = roles::create_role(&pool, org_id, "temp", &[]).await.unwrap();
+    let role_name = format!("temp-{}", Uuid::new_v4());
+    let role_id = roles::create_role(&pool, org_id, &role_name, &[]).await.unwrap();
 
     roles::delete_role(&pool, org_id, role_id).await.unwrap();
 
@@ -193,7 +195,8 @@ async fn delete_role_rejects_an_unknown_role_id() {
 async fn assign_member_role_updates_an_existing_members_role() {
     let pool = test_pool().await;
     let (org_id, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
-    let new_role_id = roles::create_role(&pool, org_id, "sync-only", &[Permission::DbSync])
+    let new_role_name = format!("sync-only-{}", Uuid::new_v4());
+    let new_role_id = roles::create_role(&pool, org_id, &new_role_name, &[Permission::DbSync])
         .await
         .unwrap();
 
@@ -215,7 +218,8 @@ async fn assign_member_role_returns_false_for_a_role_from_another_org() {
     let pool = test_pool().await;
     let (org_a, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
     let org_b = seed_bare_org(&pool).await;
-    let role_in_b = roles::create_role(&pool, org_b, "other-org-role", &[Permission::DbSync])
+    let role_name = format!("other-org-role-{}", Uuid::new_v4());
+    let role_in_b = roles::create_role(&pool, org_b, &role_name, &[Permission::DbSync])
         .await
         .unwrap();
 
@@ -223,4 +227,17 @@ async fn assign_member_role_returns_false_for_a_role_from_another_org() {
         .await
         .unwrap();
     assert!(!updated);
+}
+
+#[tokio::test]
+async fn delete_role_rejects_a_role_in_use_in_a_different_org() {
+    let pool = test_pool().await;
+    let (org_a, _) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let org_b = seed_bare_org(&pool).await;
+    // Get the role_id from org_a (which is in use there)
+    let role_id_in_use = roles::list_roles(&pool, org_a).await.unwrap()[0].id;
+
+    // Try to delete it from org_b (wrong org) — should return NotFound, not InUse
+    let result = roles::delete_role(&pool, org_b, role_id_in_use).await;
+    assert!(matches!(result, Err(roles::DeleteRoleError::NotFound)));
 }
