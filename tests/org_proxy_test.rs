@@ -213,6 +213,55 @@ async fn non_member_is_forbidden() {
     delete_namespace(&namespace).await;
 }
 
+/// A workspace-owned key's `owner_id` names a workspace, not a user — it can
+/// never legitimately match an `org_members.user_id` row. This must be
+/// rejected explicitly in `proxy_handler`, not merely as a side effect of the
+/// `org_members.user_id` foreign key elsewhere: the key itself is otherwise
+/// perfectly valid, and `X-Org-Id` access is only meaningful for a personal
+/// (`owner_type = 'user'`) key.
+#[tokio::test]
+async fn workspace_owned_key_is_forbidden_from_org_namespace_access() {
+    let pool = test_pool().await;
+    let owner_user_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+        .bind(owner_user_id)
+        .bind(format!("wsowner-{owner_user_id}@example.com"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let workspace_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces (id, owner_user_id, name) VALUES ($1, $2, $3)")
+        .bind(workspace_id)
+        .bind(owner_user_id)
+        .bind(format!("workspace-{workspace_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (full_key, prefix, hash) = auth::generate_api_key();
+    sqlx::query(
+        "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
+         VALUES ($1, $2, 'workspace', $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(owner_user_id)
+    .bind(workspace_id)
+    .bind(&prefix)
+    .bind(&hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let status = query_org_via_gateway(
+        app,
+        &full_key,
+        Uuid::new_v4(),
+        r#"{"statements":["SELECT 1"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn malformed_org_id_header_is_a_bad_request() {
     let pool = test_pool().await;

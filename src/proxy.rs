@@ -178,6 +178,16 @@ pub async fn proxy_handler(
 
     let namespace = match org_id_header(&parts.headers) {
         Some(Ok(org_id)) => {
+            // org_members.user_id is a *user* id; owner.owner_id is only a
+            // user id when owner_type == "user" (a workspace/org-owned key's
+            // owner_id names a workspace/org, not a user, and could never
+            // legitimately match a membership row). Required, not incidental
+            // belt-and-braces: without this check we'd hand a non-user id to
+            // `require_permission` as if it were a user_id.
+            if owner.owner_type != "user" {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+
             // Mirrors the HTTP/2-in-means-h2c-out fork `ProxyClient::for_version`
             // makes below: db:sync gates the gRPC replication leg, db:query
             // gates everything else (Hrana/HTTP1.1).
