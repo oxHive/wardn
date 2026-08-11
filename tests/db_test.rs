@@ -11,6 +11,7 @@ async fn test_pool() -> sqlx::PgPool {
 async fn find_api_key_by_prefix_returns_seeded_row() {
     let pool = test_pool().await;
     let owner_id = Uuid::new_v4();
+    let prefix = format!("t{}", owner_id.simple())[..12].to_string();
     sqlx::query(
         "INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
@@ -25,13 +26,13 @@ async fn find_api_key_by_prefix_returns_seeded_row() {
     )
     .bind(Uuid::new_v4())
     .bind(owner_id)
-    .bind("testpfx")
+    .bind(&prefix)
     .bind("dummy-hash")
     .execute(&pool)
     .await
     .unwrap();
 
-    let row = db::find_api_key_by_prefix(&pool, "testpfx")
+    let row = db::find_api_key_by_prefix(&pool, &prefix)
         .await
         .unwrap()
         .expect("row should exist");
