@@ -10,8 +10,10 @@ use base64::Engine as _;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use uuid::Uuid;
 
 use crate::auth::{AppState, AuthedOwner};
+use crate::roles::{self, Permission};
 use crate::routing;
 
 /// sqld exposes **two** namespace selectors on the same HTTP port, both
@@ -32,6 +34,15 @@ use crate::routing;
 /// — a client that could smuggle its own `x-namespace-bin` through would read
 /// and write any other tenant's namespace with its own valid API key.
 const X_NAMESPACE_BIN: HeaderName = HeaderName::from_static("x-namespace-bin");
+
+/// Selects an org-shared namespace instead of the caller's own mapping.
+/// Absent → today's behavior (personal key → personal namespace, no org
+/// lookup at all). Present → the caller must be a member of this org with a
+/// role granting the permission required for the outbound protocol; see
+/// `proxy_handler`. Stripped from the forwarded headers the same way
+/// `x-namespace-bin`/`Authorization`/`Host` are — it's a gateway-internal
+/// selector, sqld has no notion of it.
+const X_ORG_ID: HeaderName = HeaderName::from_static("x-org-id");
 
 /// RFC 9110 §7.6.1 connection-specific ("hop-by-hop") header fields. A proxy
 /// must not forward these in either direction: they describe the single
@@ -144,17 +155,53 @@ fn forwardable_headers(src: &HeaderMap, also_drop: &[HeaderName]) -> HeaderMap {
     out
 }
 
+/// Parses the optional `X-Org-Id` header. `None` when absent. `Some(Err(()))`
+/// when present but not a valid UUID — the caller turns that into 400 rather
+/// than silently falling back to the personal-namespace path, since a
+/// malformed org id is almost certainly a client bug worth surfacing.
+fn org_id_header(headers: &HeaderMap) -> Option<Result<Uuid, ()>> {
+    let raw = headers.get(&X_ORG_ID)?;
+    Some(
+        raw.to_str()
+            .ok()
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .ok_or(()),
+    )
+}
+
 pub async fn proxy_handler(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
     request: Request,
 ) -> Response {
-    let namespace = match routing::resolve_namespace(&state.pool, &owner).await {
-        Ok(ns) => ns,
-        Err(status) => return status.into_response(),
-    };
-
     let (parts, body) = request.into_parts();
+
+    let namespace = match org_id_header(&parts.headers) {
+        Some(Ok(org_id)) => {
+            // Mirrors the HTTP/2-in-means-h2c-out fork `ProxyClient::for_version`
+            // makes below: db:sync gates the gRPC replication leg, db:query
+            // gates everything else (Hrana/HTTP1.1).
+            let required = if parts.version == Version::HTTP_2 {
+                Permission::DbSync
+            } else {
+                Permission::DbQuery
+            };
+            if let Err(status) =
+                roles::require_permission(&state.pool, org_id, owner.owner_id, required).await
+            {
+                return status.into_response();
+            }
+            match routing::resolve_org_namespace(&state.pool, org_id).await {
+                Ok(ns) => ns,
+                Err(status) => return status.into_response(),
+            }
+        }
+        Some(Err(())) => return StatusCode::BAD_REQUEST.into_response(),
+        None => match routing::resolve_namespace(&state.pool, &owner).await {
+            Ok(ns) => ns,
+            Err(status) => return status.into_response(),
+        },
+    };
 
     let target = format!(
         "{}{}",
@@ -182,7 +229,7 @@ pub async fn proxy_handler(
     // impossible to insert in the first place; this is the belt to its braces.
     let mut headers = forwardable_headers(
         &parts.headers,
-        &[header::AUTHORIZATION, header::HOST, X_NAMESPACE_BIN],
+        &[header::AUTHORIZATION, header::HOST, X_NAMESPACE_BIN, X_ORG_ID],
     );
     let namespace_bin = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&namespace);
     let Ok(namespace_bin_value) = HeaderValue::from_str(&namespace_bin) else {
