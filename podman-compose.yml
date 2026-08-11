@@ -10,6 +10,7 @@ services:
       - "5433:5432"
   sqld:
     image: ghcr.io/tursodatabase/libsql-server:latest
-    command: ["sqld", "--http-listen-addr=0.0.0.0:8080", "--enable-namespaces"]
+    command: ["sqld", "--http-listen-addr=0.0.0.0:8080", "--enable-namespaces", "--admin-listen-addr=0.0.0.0:8090"]
     ports:
       - "8081:8080"
+      - "8090:8090"
