@@ -115,3 +115,112 @@ async fn require_permission_rejects_a_non_member() {
         roles::require_permission(&pool, org_id, Uuid::new_v4(), Permission::DbQuery).await;
     assert_eq!(result.unwrap_err(), axum::http::StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn create_role_creates_a_role_with_its_permissions() {
+    let pool = test_pool().await;
+    let org_id = seed_bare_org(&pool).await;
+
+    let role_id = roles::create_role(&pool, org_id, "analyst", &[Permission::DbQuery])
+        .await
+        .unwrap();
+
+    let all_roles = roles::list_roles(&pool, org_id).await.unwrap();
+    let created = all_roles
+        .iter()
+        .find(|r| r.id == role_id)
+        .expect("role should exist");
+    assert_eq!(created.name, "analyst");
+    assert_eq!(created.permissions, vec!["db:query".to_string()]);
+}
+
+#[tokio::test]
+async fn set_role_permissions_replaces_the_permission_set() {
+    let pool = test_pool().await;
+    let (org_id, _) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let role_id = roles::list_roles(&pool, org_id).await.unwrap()[0].id;
+
+    roles::set_role_permissions(
+        &pool,
+        role_id,
+        &[Permission::DbSync, Permission::OrgManageRoles],
+    )
+    .await
+    .unwrap();
+
+    let all_roles = roles::list_roles(&pool, org_id).await.unwrap();
+    let updated = all_roles.iter().find(|r| r.id == role_id).unwrap();
+    let mut permissions = updated.permissions.clone();
+    permissions.sort();
+    assert_eq!(
+        permissions,
+        vec!["db:sync".to_string(), "org:manage_roles".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn delete_role_removes_an_unused_role() {
+    let pool = test_pool().await;
+    let org_id = seed_bare_org(&pool).await;
+    let role_id = roles::create_role(&pool, org_id, "temp", &[]).await.unwrap();
+
+    roles::delete_role(&pool, org_id, role_id).await.unwrap();
+
+    let all_roles = roles::list_roles(&pool, org_id).await.unwrap();
+    assert!(!all_roles.iter().any(|r| r.id == role_id));
+}
+
+#[tokio::test]
+async fn delete_role_rejects_a_role_still_held_by_a_member() {
+    let pool = test_pool().await;
+    let (org_id, _) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let role_id = roles::list_roles(&pool, org_id).await.unwrap()[0].id;
+
+    let result = roles::delete_role(&pool, org_id, role_id).await;
+    assert!(matches!(result, Err(roles::DeleteRoleError::InUse)));
+}
+
+#[tokio::test]
+async fn delete_role_rejects_an_unknown_role_id() {
+    let pool = test_pool().await;
+    let org_id = seed_bare_org(&pool).await;
+
+    let result = roles::delete_role(&pool, org_id, Uuid::new_v4()).await;
+    assert!(matches!(result, Err(roles::DeleteRoleError::NotFound)));
+}
+
+#[tokio::test]
+async fn assign_member_role_updates_an_existing_members_role() {
+    let pool = test_pool().await;
+    let (org_id, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let new_role_id = roles::create_role(&pool, org_id, "sync-only", &[Permission::DbSync])
+        .await
+        .unwrap();
+
+    let updated = roles::assign_member_role(&pool, org_id, user_id, new_role_id)
+        .await
+        .unwrap();
+    assert!(updated);
+
+    let permissions = roles::member_permissions(&pool, org_id, user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(permissions.contains(&Permission::DbSync));
+    assert!(!permissions.contains(&Permission::DbQuery));
+}
+
+#[tokio::test]
+async fn assign_member_role_returns_false_for_a_role_from_another_org() {
+    let pool = test_pool().await;
+    let (org_a, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let org_b = seed_bare_org(&pool).await;
+    let role_in_b = roles::create_role(&pool, org_b, "other-org-role", &[Permission::DbSync])
+        .await
+        .unwrap();
+
+    let updated = roles::assign_member_role(&pool, org_a, user_id, role_in_b)
+        .await
+        .unwrap();
+    assert!(!updated);
+}

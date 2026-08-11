@@ -90,6 +90,132 @@ pub async fn require_permission(
     }
 }
 
+pub struct RoleWithPermissions {
+    pub id: Uuid,
+    pub name: String,
+    pub permissions: Vec<String>,
+}
+
+pub async fn list_roles(pool: &PgPool, org_id: Uuid) -> Result<Vec<RoleWithPermissions>, sqlx::Error> {
+    let roles: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM roles WHERE org_id = $1 ORDER BY name")
+            .bind(org_id)
+            .fetch_all(pool)
+            .await?;
+    let mut out = Vec::with_capacity(roles.len());
+    for (id, name) in roles {
+        let permission_rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT permission FROM role_permissions WHERE role_id = $1 ORDER BY permission",
+        )
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
+        out.push(RoleWithPermissions {
+            id,
+            name,
+            permissions: permission_rows.into_iter().map(|(p,)| p).collect(),
+        });
+    }
+    Ok(out)
+}
+
+pub async fn create_role(
+    pool: &PgPool,
+    org_id: Uuid,
+    name: &str,
+    permissions: &[Permission],
+) -> Result<Uuid, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let role_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO roles (id, org_id, name) VALUES ($1, $2, $3)")
+        .bind(role_id)
+        .bind(org_id)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    for permission in permissions {
+        sqlx::query("INSERT INTO role_permissions (role_id, permission) VALUES ($1, $2)")
+            .bind(role_id)
+            .bind(permission.as_db_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(role_id)
+}
+
+pub async fn set_role_permissions(
+    pool: &PgPool,
+    role_id: Uuid,
+    permissions: &[Permission],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM role_permissions WHERE role_id = $1")
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    for permission in permissions {
+        sqlx::query("INSERT INTO role_permissions (role_id, permission) VALUES ($1, $2)")
+            .bind(role_id)
+            .bind(permission.as_db_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum DeleteRoleError {
+    NotFound,
+    InUse,
+    Db(sqlx::Error),
+}
+
+pub async fn delete_role(pool: &PgPool, org_id: Uuid, role_id: Uuid) -> Result<(), DeleteRoleError> {
+    let (in_use,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE role_id = $1")
+        .bind(role_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DeleteRoleError::Db)?;
+    if in_use > 0 {
+        return Err(DeleteRoleError::InUse);
+    }
+    let result = sqlx::query("DELETE FROM roles WHERE id = $1 AND org_id = $2")
+        .bind(role_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .map_err(DeleteRoleError::Db)?;
+    if result.rows_affected() == 0 {
+        return Err(DeleteRoleError::NotFound);
+    }
+    Ok(())
+}
+
+/// Reassigns an existing member's role. Returns `Ok(false)` (not an error)
+/// when there's nothing to update — either the member row doesn't exist, or
+/// `role_id` doesn't belong to `org_id` (a cross-org role id is silently
+/// rejected the same way a missing member is, rather than distinguished).
+pub async fn assign_member_role(
+    pool: &PgPool,
+    org_id: Uuid,
+    user_id: Uuid,
+    role_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE org_members SET role_id = $1
+         WHERE org_id = $2 AND user_id = $3
+           AND EXISTS (SELECT 1 FROM roles WHERE id = $1 AND org_id = $2)",
+    )
+    .bind(role_id)
+    .bind(org_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
