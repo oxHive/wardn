@@ -13,6 +13,6 @@ set -euo pipefail
 CONTAINER="${GATEWAY_PG_CONTAINER:-hivemind-gateway_postgres_1}"
 
 podman exec "$CONTAINER" psql -U gateway -d gateway -c \
-  "TRUNCATE api_keys, database_mappings, org_members, workspaces, orgs, users CASCADE;"
+  "TRUNCATE role_permissions, roles, api_keys, database_mappings, org_members, workspaces, orgs, users CASCADE;"
 
 echo "Dev Postgres ($CONTAINER) reset."

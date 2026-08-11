@@ -34,3 +34,4 @@ serde = { version = "1", features = ["derive"] }
 # tests. The gateway itself proxies with hyper/hyper-util (see src/proxy.rs).
 reqwest = { version = "0.12", features = ["stream"] }
 bytes = "1"
+serde_json = "1"

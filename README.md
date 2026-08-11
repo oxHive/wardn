@@ -61,6 +61,40 @@ INSERT INTO database_mappings (owner_type, owner_id, sqld_namespace)
 curl -H "Authorization: Bearer <full_key>" http://127.0.0.1:8787/some/sqld/path
 ```
 
+### Org-shared namespaces and custom roles
+
+A personal API key can also reach an org's shared namespace by sending an
+`X-Org-Id: <org uuid>` header with the request — the gateway checks the
+caller's role in that org before proxying. There's still no self-service org
+*creation*; seed the org, its `database_mappings` row (`owner_type = 'org'`),
+and its first role by hand:
+
+```sql
+INSERT INTO orgs (id, name) VALUES (gen_random_uuid(), 'Acme Inc') RETURNING id;
+INSERT INTO database_mappings (owner_type, owner_id, sqld_namespace)
+  VALUES ('org', '<org id>', 'acme-namespace');
+INSERT INTO roles (id, org_id, name) VALUES (gen_random_uuid(), '<org id>', 'owner') RETURNING id;
+INSERT INTO role_permissions (role_id, permission) VALUES
+  ('<role id>', 'org:manage_members'),
+  ('<role id>', 'org:manage_roles'),
+  ('<role id>', 'db:query'),
+  ('<role id>', 'db:sync');
+INSERT INTO org_members (org_id, user_id, role_id) VALUES ('<org id>', '<user id>', '<role id>');
+```
+
+From there, that user's own personal key can manage roles over HTTP:
+
+```sh
+curl -X POST http://127.0.0.1:8787/orgs/<org id>/roles \
+  -H "Authorization: Bearer <full_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"analyst","permissions":["db:query"]}'
+```
+
+The permission catalog is fixed: `org:manage_members`, `org:manage_roles`,
+`db:query`, `db:sync`. See
+`docs/superpowers/specs/2026-08-11-org-roles-design.md` for the full design.
+
 ## Development
 
 ```sh
@@ -85,5 +119,7 @@ pre-existing bad row on connect.
 | `src/db.rs` | Postgres connection + typed control-plane accessors |
 | `src/routing.rs` | Resolves an authenticated owner to a sqld namespace |
 | `src/proxy.rs` | Streaming reverse-proxy to sqld (HTTP/1.1 and h2c) |
+| `src/roles.rs` | Permission catalog, role CRUD, the org-membership permission check |
+| `src/org_admin.rs` | HTTP endpoints for role management and member-role assignment |
 | `migrations/` | Postgres schema, applied automatically via `sqlx::migrate!` |
 | `docs/superpowers/` | Design specs and implementation plans for each slice built so far |
