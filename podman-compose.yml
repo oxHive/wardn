@@ -1,0 +1,15 @@
+version: "3"
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: gateway
+    ports:
+      - "5433:5432"
+  sqld:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    command: ["sqld", "--http-listen-addr=0.0.0.0:8080", "--enable-namespaces"]
+    ports:
+      - "8081:8080"
