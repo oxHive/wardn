@@ -95,6 +95,14 @@ The permission catalog is fixed: `org:manage_members`, `org:manage_roles`,
 `db:query`, `db:sync`. See
 `docs/superpowers/specs/2026-08-11-org-roles-design.md` for the full design.
 
+Note that the `db:query`/`db:sync` split is **transport-shaped, not
+intent-shaped**: `db:query` is required for HTTP/1.1 requests and `db:sync`
+for HTTP/2 requests, regardless of what the request actually does — mirroring
+the proxy's existing per-connection HTTP/1.1-vs-h2c fork. So an HTTP/2 Hrana
+client holding only `db:query` gets a 403; that is the documented, intentional
+behaviour rather than a permissions bug. Grant a role both permissions if its
+holders will use both transports.
+
 ## Development
 
 ```sh

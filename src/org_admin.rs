@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -31,13 +33,36 @@ pub struct RoleResponse {
     pub permissions: Vec<String>,
 }
 
+/// Parses the request's permission strings against the fixed catalog, and
+/// **deduplicates** them: `role_permissions` is `PRIMARY KEY (role_id,
+/// permission)`, so `["db:query","db:query"]` reaching the insert loop is a
+/// unique violation and — before this — a 500 for what is a perfectly
+/// expressible, harmless request. A repeated permission means exactly the
+/// same role as the single one, so it's collapsed rather than rejected.
+///
+/// First-seen order is preserved so the 201 body echoes the caller's ordering
+/// rather than a `HashSet`'s arbitrary one.
 fn parse_permissions(raw: &[String]) -> Result<Vec<Permission>, Response> {
-    raw.iter()
-        .map(|s| {
-            Permission::from_db_str(s)
-                .ok_or_else(|| (StatusCode::BAD_REQUEST, format!("unknown permission: {s}")).into_response())
-        })
-        .collect()
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(raw.len());
+    for s in raw {
+        let permission = Permission::from_db_str(s).ok_or_else(|| {
+            (StatusCode::BAD_REQUEST, format!("unknown permission: {s}")).into_response()
+        })?;
+        if seen.insert(permission) {
+            out.push(permission);
+        }
+    }
+    Ok(out)
+}
+
+/// A duplicate role name in the same org hits `roles`' `UNIQUE (org_id,
+/// name)`. That's a client-correctable conflict, not a gateway fault, so it
+/// gets 409 rather than the blanket 500 every other `sqlx::Error` gets.
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .map(|e| e.is_unique_violation())
+        .unwrap_or(false)
 }
 
 pub async fn create_role(
@@ -47,8 +72,7 @@ pub async fn create_role(
     Json(req): Json<CreateRoleRequest>,
 ) -> Response {
     if let Err(status) =
-        roles::require_permission(&state.pool, org_id, owner.owner_id, Permission::OrgManageRoles)
-            .await
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageRoles).await
     {
         return status.into_response();
     }
@@ -57,15 +81,24 @@ pub async fn create_role(
         Err(resp) => return resp,
     };
     match roles::create_role(&state.pool, org_id, &req.name, &permissions).await {
+        // Built from the *deduplicated* `permissions`, not `req.permissions`
+        // — echoing the request back would claim two permissions were stored
+        // for `["db:query","db:query"]` when only one was.
         Ok(role_id) => (
             StatusCode::CREATED,
             Json(RoleResponse {
                 id: role_id,
                 name: req.name,
-                permissions: req.permissions,
+                permissions: permissions
+                    .into_iter()
+                    .map(|p| p.as_db_str().to_string())
+                    .collect(),
             }),
         )
             .into_response(),
+        Err(e) if is_unique_violation(&e) => {
+            (StatusCode::CONFLICT, "role name already exists in this org").into_response()
+        }
         Err(e) => {
             tracing::error!("create role failed: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -79,8 +112,7 @@ pub async fn list_roles(
     Path(org_id): Path<Uuid>,
 ) -> Response {
     if let Err(status) =
-        roles::require_permission(&state.pool, org_id, owner.owner_id, Permission::OrgManageRoles)
-            .await
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageRoles).await
     {
         return status.into_response();
     }
@@ -110,8 +142,7 @@ pub async fn update_role(
     Json(req): Json<UpdateRoleRequest>,
 ) -> Response {
     if let Err(status) =
-        roles::require_permission(&state.pool, org_id, owner.owner_id, Permission::OrgManageRoles)
-            .await
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageRoles).await
     {
         return status.into_response();
     }
@@ -119,27 +150,16 @@ pub async fn update_role(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    // `roles::set_role_permissions` is keyed only on `role_id` and doesn't
-    // check the role exists (Task 2), so a nonexistent or wrong-org
-    // `role_id` would otherwise silently succeed with 204. Check existence,
-    // scoped to this org, before applying the update.
-    let exists: Result<Option<(Uuid,)>, sqlx::Error> =
-        sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
-            .bind(role_id)
-            .bind(org_id)
-            .fetch_optional(&state.pool)
-            .await;
-    match exists {
-        Ok(Some(_)) => {}
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!("update role existence check failed: {e:#}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }
-    match roles::set_role_permissions(&state.pool, role_id, &permissions).await {
+    // `set_role_permissions` is org-scoped and does its own existence check
+    // in the same transaction as the rewrite, so a nonexistent or wrong-org
+    // `role_id` is `NotFound` here rather than a silent 204.
+    match roles::set_role_permissions(&state.pool, org_id, role_id, &permissions).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
+        Err(roles::SetRolePermissionsError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(roles::SetRolePermissionsError::Db(e)) if is_unique_violation(&e) => {
+            (StatusCode::CONFLICT, "role name already exists in this org").into_response()
+        }
+        Err(roles::SetRolePermissionsError::Db(e)) => {
             tracing::error!("update role failed: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -152,8 +172,7 @@ pub async fn delete_role(
     Path((org_id, role_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
     if let Err(status) =
-        roles::require_permission(&state.pool, org_id, owner.owner_id, Permission::OrgManageRoles)
-            .await
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageRoles).await
     {
         return status.into_response();
     }
@@ -174,13 +193,8 @@ pub async fn assign_member_role(
     Path((org_id, user_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<AssignRoleRequest>,
 ) -> Response {
-    if let Err(status) = roles::require_permission(
-        &state.pool,
-        org_id,
-        owner.owner_id,
-        Permission::OrgManageMembers,
-    )
-    .await
+    if let Err(status) =
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageMembers).await
     {
         return status.into_response();
     }

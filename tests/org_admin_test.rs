@@ -117,6 +117,164 @@ async fn create_role_is_forbidden_without_org_manage_roles() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
+/// The `owner_type != "user"` guard lives inside `roles::require_permission`,
+/// so it covers all five admin endpoints as well as the proxy path — a
+/// workspace-owned key's `owner_id` names a workspace, not a user, and must
+/// never be looked up as an `org_members.user_id`. Mirrors
+/// `workspace_owned_key_is_forbidden_from_org_namespace_access` in
+/// `tests/org_proxy_test.rs`.
+#[tokio::test]
+async fn workspace_owned_key_is_forbidden_from_the_admin_api() {
+    let pool = test_pool().await;
+    let (org_id, _) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
+
+    let owner_user_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+        .bind(owner_user_id)
+        .bind(format!("wsadmin-{owner_user_id}@example.com"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let workspace_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces (id, owner_user_id, name) VALUES ($1, $2, $3)")
+        .bind(workspace_id)
+        .bind(owner_user_id)
+        .bind(format!("workspace-{workspace_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (full_key, prefix, hash) = auth::generate_api_key();
+    sqlx::query(
+        "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
+         VALUES ($1, $2, 'workspace', $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(owner_user_id)
+    .bind(workspace_id)
+    .bind(&prefix)
+    .bind(&hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/roles"))
+                .header(header::AUTHORIZATION, format!("Bearer {full_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"smuggled","permissions":["db:query"]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// `roles` is `UNIQUE (org_id, name)`. A client re-using a name is a
+/// correctable conflict, not a gateway fault — it must not surface as a 500.
+#[tokio::test]
+async fn create_role_rejects_a_duplicate_name_with_409() {
+    let pool = test_pool().await;
+    let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let name = format!("dupe-{}", Uuid::new_v4());
+    let body = format!(r#"{{"name":"{name}","permissions":["db:query"]}}"#);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/roles"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/roles"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+}
+
+/// `role_permissions` is `PRIMARY KEY (role_id, permission)`, so a repeated
+/// permission in the request body used to reach the insert loop and 500.
+/// It's collapsed before the insert instead — and the 201 body reports what
+/// was actually stored, not what was asked for.
+#[tokio::test]
+async fn duplicate_permissions_in_the_body_are_deduped_not_a_500() {
+    let pool = test_pool().await;
+    let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let name = format!("deduped-{}", Uuid::new_v4());
+
+    let create_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/roles"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"name":"{name}","permissions":["db:query","db:query"]}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        created["permissions"].as_array().unwrap().len(),
+        1,
+        "201 body must report the stored (deduped) permission set: {created}"
+    );
+    let role_id = created["id"].as_str().unwrap().to_string();
+
+    let update_resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/orgs/{org_id}/roles/{role_id}"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"permissions":["db:sync","db:sync"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_resp.status(), StatusCode::NO_CONTENT);
+
+    let stored = roles::list_roles(&test_pool().await, org_id).await.unwrap();
+    let role = stored
+        .iter()
+        .find(|r| r.id.to_string() == role_id)
+        .expect("role should exist");
+    assert_eq!(role.permissions, vec!["db:sync".to_string()]);
+}
+
 #[tokio::test]
 async fn create_role_rejects_an_unknown_permission_string() {
     let pool = test_pool().await;

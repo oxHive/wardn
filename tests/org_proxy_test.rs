@@ -45,12 +45,25 @@ async fn delete_namespace(name: &str) {
 
 /// Seeds an org mapped to `namespace`, a user with a personal key, a role
 /// granting `permissions`, and an org_members row assigning that role.
-/// Returns (org_id, full_key).
+/// Returns (org_id, full_key) — see [`seed_org_member_full`] when the test
+/// also needs the member's `user_id`.
 async fn seed_org_member(
     pool: &sqlx::PgPool,
     namespace: &str,
     permissions: &[Permission],
 ) -> (Uuid, String) {
+    let (org_id, _, full_key) = seed_org_member_full(pool, namespace, permissions).await;
+    (org_id, full_key)
+}
+
+/// As [`seed_org_member`], but also returns the seeded member's `user_id` —
+/// needed by tests that drive `PUT /orgs/:org_id/members/:user_id/role`.
+/// Returns (org_id, user_id, full_key).
+async fn seed_org_member_full(
+    pool: &sqlx::PgPool,
+    namespace: &str,
+    permissions: &[Permission],
+) -> (Uuid, Uuid, String) {
     let org_id = Uuid::new_v4();
     let user_id = Uuid::new_v4();
     let role_id = Uuid::new_v4();
@@ -110,15 +123,19 @@ async fn seed_org_member(
     .execute(pool)
     .await
     .unwrap();
-    (org_id, full_key)
+    (org_id, user_id, full_key)
 }
 
-async fn query_org_via_gateway(
+/// Sends a Hrana query through the real router with `X-Org-Id` set, returning
+/// the status *and* the response body — the body is what distinguishes
+/// "reached the org's actual namespace" from "reached some other namespace
+/// that also returned 200".
+async fn query_org_with_body(
     app: axum::Router,
     full_key: &str,
     org_id: Uuid,
     statements_json: &str,
-) -> StatusCode {
+) -> (StatusCode, String) {
     let resp = app
         .oneshot(
             Request::builder()
@@ -132,19 +149,202 @@ async fn query_org_via_gateway(
         )
         .await
         .unwrap();
-    resp.status()
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(body.to_vec()).unwrap())
 }
 
+async fn query_org_via_gateway(
+    app: axum::Router,
+    full_key: &str,
+    org_id: Uuid,
+    statements_json: &str,
+) -> StatusCode {
+    query_org_with_body(app, full_key, org_id, statements_json)
+        .await
+        .0
+}
+
+/// Proves the `X-Org-Id` path reaches the org's *actual* namespace, not
+/// merely that something returned 200 — same style as the walking skeleton's
+/// `namespace_isolation_through_full_router` (`tests/proxy_test.rs`). A
+/// status-only assertion cannot tell correct namespace routing from broken
+/// namespace routing, and this project's prior Critical vulnerability was
+/// exactly a wrong-namespace bug that still returned 200.
+///
+/// Writes a per-run-unique secret through the org path, then reads it back
+/// through the same org path, and separately confirms the org's namespace is
+/// *not* the member's own personal one (they have no personal mapping at
+/// all, so a fallback to it would 404 rather than silently succeed).
 #[tokio::test]
 async fn member_with_db_query_reaches_the_orgs_namespace() {
     let pool = test_pool().await;
     let namespace = format!("orgqns-{}", Uuid::new_v4());
     create_namespace(&namespace).await;
     let (org_id, key) = seed_org_member(&pool, &namespace, &[Permission::DbQuery]).await;
+    let secret = format!("ORG-SECRET-{}", Uuid::new_v4());
 
     let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
-    let status = query_org_via_gateway(app, &key, org_id, r#"{"statements":["SELECT 1"]}"#).await;
-    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = query_org_with_body(
+        app.clone(),
+        &key,
+        org_id,
+        &format!(
+            r#"{{"statements":["CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)","INSERT INTO kv (k, v) VALUES ('x', '{secret}')"]}}"#
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "org write failed: {body}");
+
+    let (status, body) =
+        query_org_with_body(app, &key, org_id, r#"{"statements":["SELECT v FROM kv"]}"#).await;
+    assert_eq!(status, StatusCode::OK, "org read failed: {body}");
+    assert!(
+        body.contains(&secret),
+        "read through X-Org-Id did not return the value written through it — \
+         the request reached the wrong namespace: {body}"
+    );
+
+    delete_namespace(&namespace).await;
+}
+
+/// The spec's cross-org isolation requirement: a member of org A holding a
+/// perfectly valid role and a technically-valid personal key cannot reach org
+/// B's namespace by pointing `X-Org-Id` at it.
+///
+/// Distinct from `non_member_is_forbidden`, whose user has no membership
+/// anywhere — that only exercises the `user_id` half of the membership
+/// lookup's `WHERE`. Here the user *is* a member, just of the wrong org, so
+/// the `org_id` half is what has to do the work.
+#[tokio::test]
+async fn member_of_one_org_cannot_use_x_org_id_for_a_different_org() {
+    let pool = test_pool().await;
+
+    let namespace_a = format!("orgxa-{}", Uuid::new_v4());
+    let namespace_b = format!("orgxb-{}", Uuid::new_v4());
+    create_namespace(&namespace_a).await;
+    create_namespace(&namespace_b).await;
+
+    // Org A's member: a real role granting db:query, in org A.
+    let (_org_a, key_a) = seed_org_member(&pool, &namespace_a, &[Permission::DbQuery]).await;
+    // Org B: a separate org with its own real namespace and mapping, whose
+    // membership org A's user has nothing to do with.
+    let (org_b, _key_b) = seed_org_member(&pool, &namespace_b, &[Permission::DbQuery]).await;
+
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let (status, body) =
+        query_org_with_body(app, &key_a, org_b, r#"{"statements":["SELECT 1"]}"#).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "org A's member reached org B via X-Org-Id: {body}"
+    );
+
+    delete_namespace(&namespace_a).await;
+    delete_namespace(&namespace_b).await;
+}
+
+/// Spans the admin API (Task 4) and the proxy (Task 3) in one test: a role
+/// created *over HTTP* and assigned *over HTTP* must actually authorize a
+/// proxied request. Every other org-proxy test seeds its role with raw SQL,
+/// so nothing else covers this seam.
+#[tokio::test]
+async fn a_role_created_and_assigned_over_http_authorizes_the_proxy() {
+    let pool = test_pool().await;
+    let namespace = format!("orge2e-{}", Uuid::new_v4());
+    create_namespace(&namespace).await;
+
+    // Bootstrap: the seeded role can manage roles and members, but grants no
+    // db access at all — so the proxied request at the end can only succeed
+    // via the role created and assigned below.
+    let (org_id, user_id, key) = seed_org_member_full(
+        &pool,
+        &namespace,
+        &[Permission::OrgManageRoles, Permission::OrgManageMembers],
+    )
+    .await;
+
+    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+
+    // Before: the bootstrap role has no db:query, so the proxy path is shut.
+    let status =
+        query_org_via_gateway(app.clone(), &key, org_id, r#"{"statements":["SELECT 1"]}"#).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bootstrap role should not grant db:query"
+    );
+
+    let role_name = format!("querier-{}", Uuid::new_v4());
+    let create_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/roles"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"name":"{role_name}","permissions":["db:query"]}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let new_role_id = created["id"].as_str().unwrap().to_string();
+
+    let assign_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/orgs/{org_id}/members/{user_id}/role"))
+                .header(header::AUTHORIZATION, format!("Bearer {key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"role_id":"{new_role_id}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(assign_resp.status(), StatusCode::NO_CONTENT);
+
+    // After: the same key, same header, now authorized by the HTTP-created
+    // role — and it reaches the org's real namespace, not just any 200.
+    let secret = format!("E2E-SECRET-{}", Uuid::new_v4());
+    let (status, body) = query_org_with_body(
+        app.clone(),
+        &key,
+        org_id,
+        &format!(
+            r#"{{"statements":["CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)","INSERT INTO kv (k, v) VALUES ('x', '{secret}')"]}}"#
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "write after reassignment failed: {body}"
+    );
+
+    let (status, body) =
+        query_org_with_body(app, &key, org_id, r#"{"statements":["SELECT v FROM kv"]}"#).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "read after reassignment failed: {body}"
+    );
+    assert!(
+        body.contains(&secret),
+        "the HTTP-assigned role reached the wrong namespace: {body}"
+    );
 
     delete_namespace(&namespace).await;
 }

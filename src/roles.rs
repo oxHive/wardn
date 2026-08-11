@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 
 use axum::http::StatusCode;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
+
+use crate::auth::AuthedOwner;
 
 /// The fixed, hardcoded permission catalog — org admins compose named roles
 /// from this set, but cannot invent new permission types (that needs a
@@ -68,16 +70,27 @@ pub async fn member_permissions(
 }
 
 /// The shared authorization check for both the proxy path and the admin
-/// endpoints: does this user, in this org, hold a role granting `required`?
+/// endpoints: does this caller, in this org, hold a role granting `required`?
 /// Non-member and member-without-permission both return the same 403 —
 /// distinguishing them would leak an org's membership to non-members.
+///
+/// Takes the whole [`AuthedOwner`] rather than a bare `user_id` on purpose:
+/// `org_members.user_id` is a *user* id, and `owner.owner_id` is only a user
+/// id when `owner_type == "user"` (a workspace/org-owned key's `owner_id`
+/// names a workspace/org, not a user, and could never legitimately match a
+/// membership row). Doing that check here, once, rather than at each call
+/// site, makes it structurally impossible for a caller to forget it — the
+/// admin endpoints had already drifted from the proxy path on exactly this.
 pub async fn require_permission(
     pool: &PgPool,
     org_id: Uuid,
-    user_id: Uuid,
+    owner: &AuthedOwner,
     required: Permission,
 ) -> Result<(), StatusCode> {
-    let permissions = match member_permissions(pool, org_id, user_id).await {
+    if owner.owner_type != "user" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let permissions = match member_permissions(pool, org_id, owner.owner_id).await {
         Ok(permissions) => permissions,
         Err(e) => {
             tracing::error!("org permission lookup failed: {e:#}");
@@ -119,6 +132,31 @@ pub async fn list_roles(pool: &PgPool, org_id: Uuid) -> Result<Vec<RoleWithPermi
     Ok(out)
 }
 
+/// Attaches `permissions` to `role_id` inside an existing transaction —
+/// shared by `create_role` and `set_role_permissions`, which would otherwise
+/// carry the identical loop twice.
+///
+/// `role_permissions` is `PRIMARY KEY (role_id, permission)`, so a repeated
+/// `Permission` in `permissions` is a unique violation. Callers are expected
+/// to hand over a deduplicated slice (`org_admin::parse_permissions` does);
+/// this stays a plain insert rather than an `ON CONFLICT DO NOTHING` so that
+/// a caller who *doesn't* dedup gets a loud error rather than a silent
+/// mismatch between what it asked for and what was stored.
+async fn insert_role_permissions(
+    tx: &mut Transaction<'_, Postgres>,
+    role_id: Uuid,
+    permissions: &[Permission],
+) -> Result<(), sqlx::Error> {
+    for permission in permissions {
+        sqlx::query("INSERT INTO role_permissions (role_id, permission) VALUES ($1, $2)")
+            .bind(role_id)
+            .bind(permission.as_db_str())
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
 pub async fn create_role(
     pool: &PgPool,
     org_id: Uuid,
@@ -133,35 +171,48 @@ pub async fn create_role(
         .bind(name)
         .execute(&mut *tx)
         .await?;
-    for permission in permissions {
-        sqlx::query("INSERT INTO role_permissions (role_id, permission) VALUES ($1, $2)")
-            .bind(role_id)
-            .bind(permission.as_db_str())
-            .execute(&mut *tx)
-            .await?;
-    }
+    insert_role_permissions(&mut tx, role_id, permissions).await?;
     tx.commit().await?;
     Ok(role_id)
 }
 
+#[derive(Debug)]
+pub enum SetRolePermissionsError {
+    NotFound,
+    Db(sqlx::Error),
+}
+
+/// Replaces a role's whole permission set. Org-scoped like [`delete_role`]:
+/// a `role_id` belonging to a different org is `NotFound`, not a silent
+/// cross-tenant mutation. The existence check and the rewrite share one
+/// transaction so a role deleted concurrently can't be resurrected with a
+/// fresh permission set.
 pub async fn set_role_permissions(
     pool: &PgPool,
+    org_id: Uuid,
     role_id: Uuid,
     permissions: &[Permission],
-) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+) -> Result<(), SetRolePermissionsError> {
+    let mut tx = pool.begin().await.map_err(SetRolePermissionsError::Db)?;
+    let exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
+            .bind(role_id)
+            .bind(org_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(SetRolePermissionsError::Db)?;
+    if exists.is_none() {
+        return Err(SetRolePermissionsError::NotFound);
+    }
     sqlx::query("DELETE FROM role_permissions WHERE role_id = $1")
         .bind(role_id)
         .execute(&mut *tx)
-        .await?;
-    for permission in permissions {
-        sqlx::query("INSERT INTO role_permissions (role_id, permission) VALUES ($1, $2)")
-            .bind(role_id)
-            .bind(permission.as_db_str())
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
+        .await
+        .map_err(SetRolePermissionsError::Db)?;
+    insert_role_permissions(&mut tx, role_id, permissions)
+        .await
+        .map_err(SetRolePermissionsError::Db)?;
+    tx.commit().await.map_err(SetRolePermissionsError::Db)?;
     Ok(())
 }
 
@@ -172,38 +223,69 @@ pub enum DeleteRoleError {
     Db(sqlx::Error),
 }
 
-pub async fn delete_role(pool: &PgPool, org_id: Uuid, role_id: Uuid) -> Result<(), DeleteRoleError> {
-    // First, verify the role exists in this org (prevents cross-org info leak)
-    let role_exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
-        .bind(role_id)
-        .bind(org_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(DeleteRoleError::Db)?;
+/// Deletes a role and everything that hangs off it.
+///
+/// `role_permissions.role_id REFERENCES roles(id)` has **no**
+/// `ON DELETE CASCADE` (see `migrations/0003_org_roles.sql`), so the children
+/// must be deleted first or Postgres raises a foreign-key violation — which
+/// is every role that has any permission attached, i.e. every real one. The
+/// migration is checksummed by sqlx and already applied, so this is fixed
+/// here in code rather than by editing `0003` in place.
+///
+/// Both deletes share one transaction: a half-deleted role (permissions gone,
+/// row still present) would silently strip its holders' access instead of
+/// failing cleanly.
+pub async fn delete_role(
+    pool: &PgPool,
+    org_id: Uuid,
+    role_id: Uuid,
+) -> Result<(), DeleteRoleError> {
+    // Verify the role exists *in this org* — a role id from another org is
+    // NotFound, never InUse, so the outcome can't be used to probe for the
+    // existence of roles in orgs the caller isn't a member of.
+    let role_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
+            .bind(role_id)
+            .bind(org_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(DeleteRoleError::Db)?;
 
     if role_exists.is_none() {
         return Err(DeleteRoleError::NotFound);
     }
 
-    // Now check if it's in use in this org
-    let (in_use,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role_id = $2")
-        .bind(org_id)
-        .bind(role_id)
-        .fetch_one(pool)
-        .await
-        .map_err(DeleteRoleError::Db)?;
+    // A role still held by a member is 409, never a cascading delete that
+    // would strand that member without a role (org_members.role_id is NOT
+    // NULL). Scoped to this org for the same reason as the check above.
+    let (in_use,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role_id = $2")
+            .bind(org_id)
+            .bind(role_id)
+            .fetch_one(pool)
+            .await
+            .map_err(DeleteRoleError::Db)?;
     if in_use > 0 {
         return Err(DeleteRoleError::InUse);
     }
 
-    // Delete the role
-    sqlx::query("DELETE FROM roles WHERE id = $1 AND org_id = $2")
+    let mut tx = pool.begin().await.map_err(DeleteRoleError::Db)?;
+    sqlx::query("DELETE FROM role_permissions WHERE role_id = $1")
         .bind(role_id)
-        .bind(org_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(DeleteRoleError::Db)?;
-
+    let result = sqlx::query("DELETE FROM roles WHERE id = $1 AND org_id = $2")
+        .bind(role_id)
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(DeleteRoleError::Db)?;
+    if result.rows_affected() == 0 {
+        // Deleted by a concurrent caller between the check above and here.
+        return Err(DeleteRoleError::NotFound);
+    }
+    tx.commit().await.map_err(DeleteRoleError::Db)?;
     Ok(())
 }
 

@@ -1,3 +1,4 @@
+use hivemind_gateway::auth::AuthedOwner;
 use hivemind_gateway::db;
 use hivemind_gateway::roles::{self, Permission};
 use uuid::Uuid;
@@ -6,6 +7,15 @@ async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://gateway:gateway@127.0.0.1:5433/gateway".to_string());
     db::connect(&url).await.expect("connect to test postgres")
+}
+
+/// A personal-key owner — the only `owner_type` for which `owner_id` is a
+/// user id, and so the only one `require_permission` will look up at all.
+fn user_owner(user_id: Uuid) -> AuthedOwner {
+    AuthedOwner {
+        owner_type: "user".to_string(),
+        owner_id: user_id,
+    }
 }
 
 /// Seeds an org, a role with the given permissions, a user, and an
@@ -93,7 +103,8 @@ async fn require_permission_allows_a_member_with_the_permission() {
     let pool = test_pool().await;
     let (org_id, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
 
-    let result = roles::require_permission(&pool, org_id, user_id, Permission::DbQuery).await;
+    let result =
+        roles::require_permission(&pool, org_id, &user_owner(user_id), Permission::DbQuery).await;
     assert!(result.is_ok());
 }
 
@@ -102,7 +113,8 @@ async fn require_permission_rejects_a_member_without_the_permission() {
     let pool = test_pool().await;
     let (org_id, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
 
-    let result = roles::require_permission(&pool, org_id, user_id, Permission::DbSync).await;
+    let result =
+        roles::require_permission(&pool, org_id, &user_owner(user_id), Permission::DbSync).await;
     assert_eq!(result.unwrap_err(), axum::http::StatusCode::FORBIDDEN);
 }
 
@@ -111,8 +123,32 @@ async fn require_permission_rejects_a_non_member() {
     let pool = test_pool().await;
     let org_id = seed_bare_org(&pool).await;
 
-    let result =
-        roles::require_permission(&pool, org_id, Uuid::new_v4(), Permission::DbQuery).await;
+    let result = roles::require_permission(
+        &pool,
+        org_id,
+        &user_owner(Uuid::new_v4()),
+        Permission::DbQuery,
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), axum::http::StatusCode::FORBIDDEN);
+}
+
+/// A workspace/org-owned key's `owner_id` names a workspace/org, never a
+/// user, so it must never be looked up as an `org_members.user_id`. The check
+/// lives inside `require_permission` itself rather than at each call site —
+/// the admin endpoints had previously drifted from the proxy path on exactly
+/// this, and a per-call-site check makes that drift possible again.
+#[tokio::test]
+async fn require_permission_rejects_a_non_user_owner_type() {
+    let pool = test_pool().await;
+    let (org_id, user_id) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+
+    // Same id as a genuine member, but presented as a workspace-owned key.
+    let owner = AuthedOwner {
+        owner_type: "workspace".to_string(),
+        owner_id: user_id,
+    };
+    let result = roles::require_permission(&pool, org_id, &owner, Permission::DbQuery).await;
     assert_eq!(result.unwrap_err(), axum::http::StatusCode::FORBIDDEN);
 }
 
@@ -143,6 +179,7 @@ async fn set_role_permissions_replaces_the_permission_set() {
 
     roles::set_role_permissions(
         &pool,
+        org_id,
         role_id,
         &[Permission::DbSync, Permission::OrgManageRoles],
     )
@@ -159,17 +196,55 @@ async fn set_role_permissions_replaces_the_permission_set() {
     );
 }
 
+/// `set_role_permissions` is org-scoped like `delete_role`: a role id that
+/// exists, but in someone else's org, must not be rewritable. Mirrors
+/// `assign_member_role_returns_false_for_a_role_from_another_org`.
+#[tokio::test]
+async fn set_role_permissions_rejects_a_role_from_another_org() {
+    let pool = test_pool().await;
+    let (org_a, _) = seed_member_with_role(&pool, &[Permission::DbQuery]).await;
+    let org_b = seed_bare_org(&pool).await;
+    let role_in_a = roles::list_roles(&pool, org_a).await.unwrap()[0].id;
+
+    let result = roles::set_role_permissions(&pool, org_b, role_in_a, &[Permission::DbSync]).await;
+    assert!(matches!(
+        result,
+        Err(roles::SetRolePermissionsError::NotFound)
+    ));
+
+    // The role in org A is untouched.
+    let unchanged = roles::list_roles(&pool, org_a).await.unwrap();
+    let role = unchanged.iter().find(|r| r.id == role_in_a).unwrap();
+    assert_eq!(role.permissions, vec!["db:query".to_string()]);
+}
+
+/// The role carries a permission on purpose: `role_permissions.role_id`
+/// references `roles(id)` with no `ON DELETE CASCADE`, so deleting a role
+/// with children used to FK-violate — i.e. every role anyone would actually
+/// create. A permissionless role (as this test used to seed) never exercised
+/// that path.
 #[tokio::test]
 async fn delete_role_removes_an_unused_role() {
     let pool = test_pool().await;
     let org_id = seed_bare_org(&pool).await;
     let role_name = format!("temp-{}", Uuid::new_v4());
-    let role_id = roles::create_role(&pool, org_id, &role_name, &[]).await.unwrap();
+    let role_id = roles::create_role(&pool, org_id, &role_name, &[Permission::DbQuery])
+        .await
+        .unwrap();
 
     roles::delete_role(&pool, org_id, role_id).await.unwrap();
 
     let all_roles = roles::list_roles(&pool, org_id).await.unwrap();
     assert!(!all_roles.iter().any(|r| r.id == role_id));
+
+    // The children went with it, rather than being orphaned.
+    let (leftover,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM role_permissions WHERE role_id = $1")
+            .bind(role_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(leftover, 0);
 }
 
 #[tokio::test]
