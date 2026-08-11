@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod proxy;
+pub mod roles;
 pub mod routing;
 
 pub use auth::AppState;
