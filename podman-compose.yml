@@ -20,3 +20,21 @@ services:
     ports:
       - "127.0.0.1:8081:8080"
       - "127.0.0.1:8090:8090"
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - postgres
+      - sqld
+    environment:
+      # Container-to-container addresses (compose's internal DNS), not the
+      # host-published loopback ports above — postgres/sqld are reachable
+      # from the gateway container by service name on their internal ports.
+      DATABASE_URL: postgres://gateway:gateway@postgres:5432/gateway
+      SQLD_URL: http://sqld:8080
+      LISTEN_ADDR: 0.0.0.0:8787
+    # The gateway is the one service meant to be reachable — still loopback
+    # only here since this compose file is for local dev, not production.
+    ports:
+      - "127.0.0.1:8787:8787"
