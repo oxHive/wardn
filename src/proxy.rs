@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use axum::Extension;
 use axum::body::Body;
@@ -66,13 +67,32 @@ pub struct ProxyClient {
     http2: Client<HttpConnector, Body>,
 }
 
+/// How long to wait for a TCP connection to sqld before giving up.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a pooled connection may sit idle before it's closed. Bounds how
+/// long a stuck-but-not-dropped sqld connection can occupy a pool slot.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long to wait for sqld's response *head* after sending a request.
+/// Deliberately not a whole-request timeout: a streaming gRPC response can
+/// legitimately run far longer than this once headers arrive.
+const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn connector_with_timeout() -> HttpConnector {
+    let mut connector = HttpConnector::new();
+    connector.set_connect_timeout(Some(CONNECT_TIMEOUT));
+    connector
+}
+
 impl ProxyClient {
     pub fn new() -> Self {
         Self {
-            http1: Client::builder(TokioExecutor::new()).build(HttpConnector::new()),
+            http1: Client::builder(TokioExecutor::new())
+                .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+                .build(connector_with_timeout()),
             http2: Client::builder(TokioExecutor::new())
                 .http2_only(true)
-                .build(HttpConnector::new()),
+                .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+                .build(connector_with_timeout()),
         }
     }
 
@@ -164,14 +184,6 @@ pub async fn proxy_handler(
         &parts.headers,
         &[header::AUTHORIZATION, header::HOST, X_NAMESPACE_BIN],
     );
-    let namespace_host = format!("{namespace}.local");
-    let Ok(host_value) = HeaderValue::from_str(&namespace_host) else {
-        tracing::error!(
-            "sqld_namespace {namespace:?} cannot be encoded into a Host header; \
-             refusing to proxy"
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
     let namespace_bin = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&namespace);
     let Ok(namespace_bin_value) = HeaderValue::from_str(&namespace_bin) else {
         tracing::error!(
@@ -180,10 +192,40 @@ pub async fn proxy_handler(
         );
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    headers.insert(header::HOST, host_value);
     headers.insert(X_NAMESPACE_BIN, namespace_bin_value);
 
     let (client, outbound_version) = state.client.for_version(parts.version);
+
+    // `Host` only means anything on the Hrana/HTTP endpoints, which are
+    // HTTP/1.1 only in practice — and RFC 9113 §8.3.1 treats an HTTP/2
+    // request carrying both `:authority` (derived from `target` below) and a
+    // `Host` with a different value as malformed. sqld/hyper tolerate the
+    // mismatch today, but a stricter intermediary in front of sqld later
+    // would not, so it's simplest to just never send it on the h2 leg.
+    if outbound_version == Version::HTTP_11 {
+        let namespace_host = format!("{namespace}.local");
+        let Ok(host_value) = HeaderValue::from_str(&namespace_host) else {
+            tracing::error!(
+                "sqld_namespace {namespace:?} cannot be encoded into a Host header; \
+                 refusing to proxy"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        headers.insert(header::HOST, host_value);
+    }
+
+    // RFC 9113 §8.2.2 permits `te: trailers` on HTTP/2 even though `te` is
+    // otherwise hop-by-hop — some gRPC servers (grpc-go) reject a request
+    // that omits it. `forwardable_headers` already stripped it above; put it
+    // back, but only when the client actually sent it and we're speaking h2
+    // outbound (sqld's own gRPC service doesn't check for it, but another
+    // gRPC upstream might).
+    if outbound_version == Version::HTTP_2
+        && let Some(te) = parts.headers.get(header::TE)
+        && te.as_bytes().eq_ignore_ascii_case(b"trailers")
+    {
+        headers.insert(header::TE, HeaderValue::from_static("trailers"));
+    }
 
     // The body is moved through untouched — no `to_bytes` buffering in either
     // direction, so an arbitrarily large upload or a long-lived streaming
@@ -207,11 +249,19 @@ pub async fn proxy_handler(
         }
     };
 
-    let upstream = match client.request(outbound).await {
-        Ok(resp) => resp,
-        Err(e) => {
+    let upstream = match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, client.request(outbound)).await
+    {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => {
             tracing::error!("proxy request to sqld failed: {e}");
             return StatusCode::BAD_GATEWAY.into_response();
+        }
+        Err(_) => {
+            tracing::error!(
+                "proxy request to sqld timed out after {RESPONSE_HEAD_TIMEOUT:?} \
+                 waiting for a response"
+            );
+            return StatusCode::GATEWAY_TIMEOUT.into_response();
         }
     };
 

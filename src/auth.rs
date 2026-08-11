@@ -137,15 +137,16 @@ pub async fn auth_middleware(
         }
     };
     let Some(row) = row else {
+        // Unknown prefix, or a revoked key — `find_api_key_by_prefix` only
+        // matches non-revoked rows, so the two cases are indistinguishable
+        // here, and both already get the same 401.
+        //
         // Verify against a throwaway hash anyway. Without this, an unknown
         // prefix returns in microseconds while a known-but-wrong key pays the
         // full argon2 cost — a timing oracle for "does this prefix exist".
         let _ = verify_key(full_key, &DUMMY_HASH);
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    if row.revoked_at.is_some() {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
     if !verify_key(full_key, &row.key_hash) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
