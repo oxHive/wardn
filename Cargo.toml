@@ -28,10 +28,13 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 serde = { version = "1", features = ["derive"] }
+# Simple JSON client for sqld's admin API (database provisioning,
+# src/provisioning.rs) — the data-plane proxy itself still uses
+# hyper/hyper-util directly (see src/proxy.rs) for streaming and
+# protocol-accurate HTTP/1.1-vs-h2c forwarding, which reqwest doesn't give
+# fine-grained enough control over.
+reqwest = { version = "0.12", features = ["stream"] }
 
 [dev-dependencies]
-# Test-only HTTP client, used to drive sqld's admin API from the integration
-# tests. The gateway itself proxies with hyper/hyper-util (see src/proxy.rs).
-reqwest = { version = "0.12", features = ["stream"] }
 bytes = "1"
 serde_json = "1"

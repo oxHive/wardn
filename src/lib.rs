@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod org_admin;
+pub mod provisioning;
 pub mod proxy;
 pub mod roles;
 pub mod routing;
@@ -9,7 +10,7 @@ pub mod routing;
 pub use auth::AppState;
 use axum::{
     Router,
-    routing::{any, get, patch, post, put},
+    routing::{any, delete, get, patch, post, put},
 };
 
 async fn healthz() -> &'static str {
