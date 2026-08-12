@@ -1,3 +1,4 @@
+pub mod api_keys;
 pub mod auth;
 pub mod config;
 pub mod db;
@@ -20,6 +21,11 @@ async fn healthz() -> &'static str {
 
 pub fn app(state: AppState) -> Router {
     Router::new()
+        .route(
+            "/api-keys",
+            get(api_keys::list_keys).post(api_keys::create_key),
+        )
+        .route("/api-keys/{id}", delete(api_keys::revoke_key))
         .route("/orgs", post(registration::create_org))
         .route("/orgs/{org_id}/members", post(org::members::add_member))
         .route(
