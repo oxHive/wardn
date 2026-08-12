@@ -4,6 +4,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use hivemind_gateway::auth::AppState;
 use hivemind_gateway::db;
+use hivemind_gateway::observability;
+use std::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -232,4 +234,56 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     drop(_guard);
 
     delete_namespace(&user_id.to_string()).await;
+}
+
+#[tokio::test]
+async fn metrics_endpoint_reports_pg_pool_gauges() {
+    let pool = test_pool().await;
+    let handle = common::metrics_handle();
+    let state = AppState::new(pool, test_sqld_url())
+        .with_sqld_admin_url(admin_url())
+        .with_metrics_handle(handle)
+        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
+    let app = hivemind_gateway::app(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", common::TEST_METRICS_TOKEN),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let rendered = String::from_utf8(body.to_vec()).unwrap();
+
+    // `set()` registers the metric even at value 0 — presence, not
+    // magnitude, is what a freshly connected pool can promise.
+    assert!(rendered.contains("gateway_pg_pool_size "));
+    assert!(rendered.contains("gateway_pg_pool_idle "));
+}
+
+#[tokio::test]
+async fn check_sqld_up_true_for_reachable_sqld() {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert!(observability::check_sqld_up(&client, &test_sqld_url()).await);
+}
+
+#[tokio::test]
+async fn check_sqld_up_false_for_unreachable_sqld() {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    assert!(!observability::check_sqld_up(&client, "http://127.0.0.1:1").await);
 }

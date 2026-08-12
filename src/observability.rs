@@ -7,6 +7,7 @@ use std::time::Duration;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use sqlx::PgPool;
 
 use crate::auth::AppState;
 
@@ -26,6 +27,7 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
     if state.metrics_token.is_empty() || token != Some(state.metrics_token.as_str()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    refresh_pg_pool_gauges(&state.pool);
     let body = state.metrics_handle.render();
     (
         StatusCode::OK,
@@ -33,6 +35,15 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
         body,
     )
         .into_response()
+}
+
+/// Sets `gateway_pg_pool_size`/`gateway_pg_pool_idle` from the pool's current
+/// state. Called at `/metrics` scrape time (`metrics_handler`) rather than on
+/// a timer — `PgPool::size`/`num_idle` are synchronous, in-memory reads, so
+/// there is no cost to computing them fresh on every scrape.
+pub fn refresh_pg_pool_gauges(pool: &PgPool) {
+    metrics::gauge!("gateway_pg_pool_size").set(pool.size() as f64);
+    metrics::gauge!("gateway_pg_pool_idle").set(pool.num_idle() as f64);
 }
 
 /// Increments `gateway_proxy_requests_in_flight` on construction and
@@ -87,4 +98,26 @@ pub fn record_proxy_metrics(
         "namespace" => namespace.to_string(),
     )
     .record(duration.as_secs_f64());
+}
+
+/// A single reachability probe against `sqld_url`: any HTTP response at all
+/// counts as up (this answers "is the network path and the sqld process
+/// alive," not "is every endpoint healthy"). A connection failure or timeout
+/// counts as down.
+pub async fn check_sqld_up(client: &reqwest::Client, sqld_url: &str) -> bool {
+    client.get(sqld_url).send().await.is_ok()
+}
+
+/// Runs forever, probing `sqld_url` on `interval` and publishing the result
+/// to the `gateway_sqld_up` gauge (`1.0` up, `0.0` down). Spawned once, in
+/// production only, alongside the provisioning worker — see `main.rs`. Its
+/// own interval, decoupled from `/metrics` scrape cadence, so a scrape never
+/// blocks on a network call to sqld.
+pub async fn sqld_health_check_loop(client: reqwest::Client, sqld_url: String, interval: Duration) {
+    let mut ticker = tokio::time::interval(interval);
+    loop {
+        ticker.tick().await;
+        let up = check_sqld_up(&client, &sqld_url).await;
+        metrics::gauge!("gateway_sqld_up").set(if up { 1.0 } else { 0.0 });
+    }
 }

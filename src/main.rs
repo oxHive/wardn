@@ -1,12 +1,16 @@
 use std::time::Duration;
 
-use hivemind_gateway::{AppState, app, config::Config, db, provisioning};
+use hivemind_gateway::{AppState, app, config::Config, db, observability, provisioning};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::EnvFilter;
 
 /// How often the background provisioning worker retries pending outbox
 /// rows. See `docs/superpowers/specs/2026-08-12-database-provisioning-design.md`.
 const PROVISIONING_WORKER_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How often the background health-check loop probes sqld for reachability.
+/// See `observability::sqld_health_check_loop`.
+const SQLD_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,6 +37,16 @@ async fn main() -> anyhow::Result<()> {
         worker_pool,
         worker_admin_url,
         PROVISIONING_WORKER_INTERVAL,
+    ));
+
+    let health_check_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client construction with these settings cannot fail");
+    tokio::spawn(observability::sqld_health_check_loop(
+        health_check_client,
+        config.sqld_url.clone(),
+        SQLD_HEALTH_CHECK_INTERVAL,
     ));
 
     let state = AppState::new(pool, config.sqld_url.clone())
