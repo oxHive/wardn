@@ -142,7 +142,7 @@ pub async fn list_roles(pool: &PgPool, org_id: Uuid) -> Result<Vec<RoleWithPermi
 /// this stays a plain insert rather than an `ON CONFLICT DO NOTHING` so that
 /// a caller who *doesn't* dedup gets a loud error rather than a silent
 /// mismatch between what it asked for and what was stored.
-async fn insert_role_permissions(
+pub(crate) async fn insert_role_permissions(
     tx: &mut Transaction<'_, Postgres>,
     role_id: Uuid,
     permissions: &[Permission],

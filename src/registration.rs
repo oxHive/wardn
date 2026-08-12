@@ -1,13 +1,14 @@
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{self, AppState};
+use crate::auth::{self, AppState, AuthedOwner};
 use crate::provisioning::{self, OutboxRow};
+use crate::roles;
 
 #[derive(Deserialize)]
 pub struct CreateUserRequest {
@@ -105,6 +106,112 @@ pub async fn create_user(
         }
         Err(e) => {
             tracing::error!("create user failed: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreateOrgRequest {
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct CreateOrgResponse {
+    pub org_id: Uuid,
+}
+
+/// Inserts the new org, a bootstrap `owner` role holding every permission in
+/// the catalog, the creator's membership in that role, and the org's
+/// provisioning outbox row — all in one transaction. Reuses
+/// `roles::insert_role_permissions` for the permission-attach loop rather
+/// than duplicating it, but can't reuse `roles::create_role` itself since
+/// that function opens its own transaction and this one needs everything
+/// atomic with the org insert.
+async fn insert_org(
+    pool: &PgPool,
+    name: &str,
+    creator_user_id: Uuid,
+) -> Result<(Uuid, OutboxRow), sqlx::Error> {
+    let org_id = Uuid::new_v4();
+    let role_id = Uuid::new_v4();
+    let outbox_id = Uuid::new_v4();
+    let namespace = org_id.to_string();
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO orgs (id, name) VALUES ($1, $2)")
+        .bind(org_id)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO roles (id, org_id, name) VALUES ($1, $2, 'owner')")
+        .bind(role_id)
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?;
+    roles::insert_role_permissions(&mut tx, role_id, &roles::ALL_PERMISSIONS).await?;
+    sqlx::query("INSERT INTO org_members (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+        .bind(org_id)
+        .bind(creator_user_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO namespace_provisioning_outbox (id, owner_type, owner_id, sqld_namespace)
+         VALUES ($1, 'org', $2, $3)",
+    )
+    .bind(outbox_id)
+    .bind(org_id)
+    .bind(&namespace)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok((
+        org_id,
+        OutboxRow {
+            id: outbox_id,
+            owner_type: "org".to_string(),
+            owner_id: org_id,
+            sqld_namespace: namespace,
+            attempts: 0,
+        },
+    ))
+}
+
+/// `POST /orgs` — authenticated (goes through `auth_middleware` normally,
+/// reads the caller via the `AuthedOwner` extension). Only a personal
+/// (`owner_type == "user"`) key may create an org — a workspace/org-owned
+/// key's `owner_id` is not a user id and could never legitimately become an
+/// `org_members.user_id`, the same reasoning `roles::require_permission`
+/// already applies to the org-shared-namespace proxy path.
+///
+/// Mints no second API key: the caller's existing personal key, plus
+/// `X-Org-Id: <org_id>`, already reaches the new org's namespace once this
+/// makes them its `owner`.
+pub async fn create_org(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+    Json(req): Json<CreateOrgRequest>,
+) -> Response {
+    if owner.owner_type != "user" {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match insert_org(&state.pool, &req.name, owner.owner_id).await {
+        Ok((org_id, outbox_row)) => {
+            if let Err(e) = provisioning::attempt_provisioning(
+                &state.pool,
+                &state.sqld_admin_url,
+                &outbox_row,
+            )
+            .await
+            {
+                tracing::error!("inline provisioning attempt failed: {e:#}");
+            }
+            (StatusCode::CREATED, Json(CreateOrgResponse { org_id })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("create org failed: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

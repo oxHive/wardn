@@ -20,6 +20,7 @@ async fn healthz() -> &'static str {
 
 pub fn app(state: AppState) -> Router {
     Router::new()
+        .route("/orgs", post(registration::create_org))
         .route(
             "/orgs/{org_id}/roles",
             post(org_admin::create_role).get(org_admin::list_roles),
