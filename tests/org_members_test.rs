@@ -308,6 +308,72 @@ async fn add_member_accepts_a_differently_cased_email() {
     delete_namespace(&org_id_str).await;
 }
 
+/// `users.email`'s UNIQUE constraint is case-*sensitive* and registration
+/// doesn't normalize, so two accounts differing only in case are a real,
+/// reachable state — both `POST /users` calls below succeed. The
+/// case-insensitive invite lookup therefore matches two rows, and the only
+/// safe answer is to refuse: nothing in the request says which of the two
+/// accounts was meant, and guessing would attach org membership to an
+/// account the admin never intended to invite.
+#[tokio::test]
+async fn add_member_refuses_an_email_matching_two_case_variant_accounts() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let (_owner_id, owner_key) =
+        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
+    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id: uuid::Uuid = org_id_str.parse().unwrap();
+    let role_id = bootstrap_role_id(&pool, org_id).await;
+
+    // Same address, two casings, two separate accounts.
+    let lower_email = format!("dupe-{}@example.com", uuid::Uuid::new_v4());
+    let upper_email = lower_email.to_uppercase();
+    let (lower_id, _lower_key) = register(app.clone(), &lower_email).await;
+    let (upper_id, _upper_key) = register(app.clone(), &upper_email).await;
+    assert_ne!(
+        lower_id, upper_id,
+        "case-variant registrations should be two distinct accounts"
+    );
+
+    // Either casing is now ambiguous — neither may resolve to a guess.
+    for email in [&lower_email, &upper_email] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/orgs/{org_id}/members"))
+                    .header(header::AUTHORIZATION, format!("Bearer {owner_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"email":"{email}","role_id":"{role_id}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "an ambiguous case-insensitive email match must not silently pick an account ({email})"
+        );
+    }
+
+    // And nothing was written: neither account became a member.
+    let (member_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM org_members WHERE org_id = $1 AND user_id = ANY($2)")
+            .bind(org_id)
+            .bind(vec![lower_id, upper_id])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(member_count, 0, "the refused invite must not have added anyone");
+
+    delete_namespace(&org_id_str).await;
+}
+
 /// The Task 2 (org membership) × Task 3 (self-service keys) seam, which
 /// neither feature's own tests cover: a member minted key — not the one from
 /// registration — must reach the org's namespace, and revoking it must kill

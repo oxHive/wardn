@@ -80,19 +80,39 @@ pub async fn add_member(
         return status.into_response();
     }
 
-    let user_row: Result<Option<(Uuid,)>, sqlx::Error> =
-        // Case-insensitive: an exact match would `404` ("not registered") for
-        // `Foo@Example.com` when `foo@example.com` *is* registered, which
-        // misleads the admin into thinking the invitee needs to sign up.
+    // Case-insensitive: an exact match would `404` ("not registered") for
+    // `Foo@Example.com` when `foo@example.com` *is* registered, which
+    // misleads the admin into thinking the invitee needs to sign up.
+    //
+    // `fetch_all`, not `fetch_optional`, deliberately: `users.email`'s UNIQUE
+    // is case-*sensitive* and registration doesn't normalize, so `foo@x.com`
+    // and `Foo@x.com` can both exist as separate accounts. `fetch_optional`
+    // would silently hand back whichever row Postgres returned first (order
+    // unspecified), attaching org membership to an account the admin never
+    // meant to invite.
+    let user_rows: Result<Vec<(Uuid,)>, sqlx::Error> =
         sqlx::query_as("SELECT id FROM users WHERE lower(email) = lower($1)")
             .bind(&req.email)
-            .fetch_optional(&state.pool)
+            .fetch_all(&state.pool)
             .await;
-    let user_id = match user_row {
-        Ok(Some((id,))) => id,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+    let rows = match user_rows {
+        Ok(rows) => rows,
         Err(e) => {
             tracing::error!("user lookup by email failed: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let user_id = match rows.as_slice() {
+        [] => return StatusCode::NOT_FOUND.into_response(),
+        [(id,)] => *id,
+        // A data-integrity anomaly this request can't disambiguate on the
+        // client's behalf — nothing in the invite body identifies *which*
+        // case-variant account was meant. Refuse rather than guess.
+        _ => {
+            tracing::error!(
+                "email {:?} matched multiple users case-insensitively — refusing to guess which account to invite",
+                req.email
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
