@@ -175,6 +175,7 @@ pub async fn proxy_handler(
     request: Request,
 ) -> Response {
     let start = Instant::now();
+    let _in_flight = crate::observability::InFlightGuard::new();
     let (parts, body) = request.into_parts();
 
     let mut org_id_for_usage: Option<Uuid> = None;
@@ -251,6 +252,12 @@ pub async fn proxy_handler(
 
     let (client, outbound_version) = state.client.for_version(parts.version);
 
+    let protocol = if outbound_version == Version::HTTP_2 {
+        "sync"
+    } else {
+        "query"
+    };
+
     // One usage event per request that actually reached sqld — see
     // docs/superpowers/specs/2026-08-12-usage-metering-design.md. Defined
     // here, called from the two places below that qualify:
@@ -278,11 +285,6 @@ pub async fn proxy_handler(
     // ordinary logs: a deployment that raises the level floor above `INFO`
     // (via `RUST_LOG`, see `src/main.rs`) silently stops metering.
     let emit_usage_event = |status: StatusCode| {
-        let protocol = if outbound_version == Version::HTTP_2 {
-            "sync"
-        } else {
-            "query"
-        };
         let org_id_field = org_id_for_usage
             .map(|id| id.to_string())
             .unwrap_or_default();
@@ -365,6 +367,12 @@ pub async fn proxy_handler(
                  waiting for a response"
             );
             emit_usage_event(StatusCode::GATEWAY_TIMEOUT);
+            crate::observability::record_proxy_metrics(
+                protocol,
+                &namespace,
+                StatusCode::GATEWAY_TIMEOUT,
+                start.elapsed(),
+            );
             return StatusCode::GATEWAY_TIMEOUT.into_response();
         }
     };
@@ -379,6 +387,12 @@ pub async fn proxy_handler(
     );
 
     emit_usage_event(upstream_parts.status);
+    crate::observability::record_proxy_metrics(
+        protocol,
+        &namespace,
+        upstream_parts.status,
+        start.elapsed(),
+    );
 
     // `Body::new` keeps the upstream body as a stream *and* passes its trailer
     // frame through — gRPC carries its `grpc-status`/`grpc-message` in HTTP/2

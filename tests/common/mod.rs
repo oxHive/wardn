@@ -166,3 +166,48 @@ static METRICS_HANDLE: LazyLock<PrometheusHandle> = LazyLock::new(|| {
 pub fn metrics_handle() -> PrometheusHandle {
     METRICS_HANDLE.clone()
 }
+
+/// Parses a single **unlabeled** gauge/counter value out of Prometheus text
+/// exposition format — a line of exactly `metric_name value`, no `{...}`
+/// label block. Returns `0.0` if the metric has no samples yet in this
+/// process (Prometheus text output simply omits metrics nothing has touched).
+pub fn extract_unlabeled_metric(rendered: &str, metric_name: &str) -> f64 {
+    for line in rendered.lines() {
+        if let Some((name, value)) = line.split_once(' ') {
+            if name == metric_name {
+                if let Ok(v) = value.trim().parse::<f64>() {
+                    return v;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+/// Finds the Prometheus text line for `metric_name{...}` whose label block
+/// contains every string in `must_contain` (e.g. `["namespace=\"...\"",
+/// "protocol=\"query\""]`), and parses its trailing value. `None` if no
+/// matching line exists yet.
+pub fn extract_labeled_metric(rendered: &str, metric_name: &str, must_contain: &[&str]) -> Option<f64> {
+    let prefix = format!("{metric_name}{{");
+    for line in rendered.lines() {
+        if !line.starts_with(&prefix) {
+            continue;
+        }
+        if !must_contain.iter().all(|needle| line.contains(needle)) {
+            continue;
+        }
+        if let Some(value) = line.rsplit(' ').next() {
+            if let Ok(v) = value.parse::<f64>() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// True if a labeled sample matching `must_contain` exists at all — see
+/// [`extract_labeled_metric`] when the value itself matters.
+pub fn has_labeled_metric(rendered: &str, metric_name: &str, must_contain: &[&str]) -> bool {
+    extract_labeled_metric(rendered, metric_name, must_contain).is_some()
+}
