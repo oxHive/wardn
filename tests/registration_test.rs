@@ -4,6 +4,8 @@ use hivemind_gateway::auth::AppState;
 use hivemind_gateway::db;
 use tower::ServiceExt;
 
+mod common;
+
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://gateway:gateway@127.0.0.1:5433/gateway".to_string());
@@ -106,6 +108,11 @@ async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
 #[tokio::test]
 async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     let pool = test_pool().await;
+    // This is the one registration test that leaves a row `pending` and then
+    // asserts on it, so it contends with `provisioning_test`'s worker test —
+    // which runs in a *different* binary, hence a Postgres advisory lock
+    // rather than a process-local `Mutex`. See `tests/common/mod.rs`.
+    let _lock = common::lock_outbox(&pool).await;
     // Unreachable admin URL — the inline attempt inside create_user must
     // fail without failing the request itself.
     let state = AppState::new(pool.clone(), test_sqld_url())
@@ -131,8 +138,8 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let user_id: uuid::Uuid = created["user_id"].as_str().unwrap().parse().unwrap();
 
-    let (status, attempts): (String, i32) = sqlx::query_as(
-        "SELECT status, attempts FROM namespace_provisioning_outbox
+    let (outbox_id, status, attempts): (uuid::Uuid, String, i32) = sqlx::query_as(
+        "SELECT id, status, attempts FROM namespace_provisioning_outbox
          WHERE owner_type = 'user' AND owner_id = $1",
     )
     .bind(user_id)
@@ -141,6 +148,51 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     .unwrap();
     assert_eq!(status, "pending");
     assert_eq!(attempts, 1);
+
+    // Deliberately not left behind: a surviving `pending` row is exactly what
+    // a *later* run's worker test would sweep up and provision for real.
+    common::delete_outbox_row(&pool, outbox_id).await;
+}
+
+#[tokio::test]
+async fn create_user_with_an_already_registered_email_returns_409() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let email = format!("dupe-{}@example.com", uuid::Uuid::new_v4());
+    let register = || {
+        app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/users")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
+                .unwrap(),
+        )
+    };
+
+    let first = register().await.unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(first.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let user_id = created["user_id"].as_str().unwrap().to_string();
+
+    // `users.email` is UNIQUE: the second attempt is a client-correctable
+    // conflict, not a gateway fault, and must not look like a 500.
+    let second = register().await.unwrap();
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(second.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(body.to_vec()).unwrap(),
+        "email already registered"
+    );
+
+    delete_namespace(&user_id).await;
 }
 
 async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {

@@ -12,7 +12,12 @@ set -euo pipefail
 
 CONTAINER="${GATEWAY_PG_CONTAINER:-hivemind-gateway_postgres_1}"
 
+# namespace_provisioning_outbox is listed explicitly: it has no FK to
+# users/orgs, so CASCADE never reaches it. Left behind, its surviving
+# pending/failed rows would have the background provisioning worker recreate
+# namespaces and insert database_mappings rows for owner ids that no longer
+# exist after the reset.
 podman exec "$CONTAINER" psql -U gateway -d gateway -c \
-  "TRUNCATE role_permissions, roles, api_keys, database_mappings, org_members, workspaces, orgs, users CASCADE;"
+  "TRUNCATE role_permissions, roles, api_keys, database_mappings, namespace_provisioning_outbox, org_members, workspaces, orgs, users CASCADE;"
 
 echo "Dev Postgres ($CONTAINER) reset."

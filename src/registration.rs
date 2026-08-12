@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AppState, AuthedOwner};
+use crate::org_admin::is_unique_violation;
 use crate::provisioning::{self, OutboxRow};
 use crate::roles;
 
@@ -83,6 +84,12 @@ async fn insert_user(
 /// failed or slow inline provisioning attempt never costs the caller their
 /// account — see
 /// `docs/superpowers/specs/2026-08-12-database-provisioning-design.md`.
+///
+/// Re-registering an already-known address hits `users.email`'s `UNIQUE`, and
+/// is by far the most common client error on this endpoint — it gets a 409 so
+/// it's distinguishable from a genuine gateway fault both to the caller and in
+/// the error logs, exactly as `org_admin::create_role` treats a duplicate role
+/// name.
 pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
@@ -103,6 +110,9 @@ pub async fn create_user(
                 Json(CreateUserResponse { user_id, api_key }),
             )
                 .into_response()
+        }
+        Err(e) if is_unique_violation(&e) => {
+            (StatusCode::CONFLICT, "email already registered").into_response()
         }
         Err(e) => {
             tracing::error!("create user failed: {e:#}");

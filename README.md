@@ -11,9 +11,11 @@ proxy the request there. It never parses memory content or MCP protocol —
 see `docs/superpowers/specs/2026-08-11-walking-skeleton-design.md` for the
 full design and the boundary this is built to respect.
 
-**Status:** walking skeleton. Org role enforcement, billing, rate limiting,
-an admin API, and provisioning automation don't exist yet — see the memory
-entries tagged `project:hivemind-gateway` for the current state and plan, or
+**Status:** walking skeleton, plus org role enforcement and self-service
+database provisioning (`POST /users` and `POST /orgs` now create their own
+sqld namespaces — no more hand-seeding). Billing, rate limiting, a general
+admin API, and observability/alerting don't exist yet — see the memory entries
+tagged `project:hivemind-gateway` for the current state and plan, or
 `docs/superpowers/plans/2026-08-11-walking-skeleton.md` for how this was built.
 
 ## Quickstart
@@ -30,63 +32,67 @@ Postgres migrations automatically on first connect — nothing else to run.
 curl http://127.0.0.1:8787/healthz   # -> ok
 ```
 
-### Seeding a test user, API key, and namespace
+### Registering a user, key, and namespace
 
-There's deliberately no admin API in this slice (see the design spec's
-Global Constraints) — seed data directly:
-
-```sh
-# 1. Create a namespace in sqld
-curl -X POST http://127.0.0.1:8090/v1/namespaces/myns/create -d '{}'
-
-# 2. Insert a user + database_mapping via psql
-podman exec -it hivemind-gateway_postgres_1 psql -U gateway -d gateway
-```
-```sql
-INSERT INTO users (id, email) VALUES (gen_random_uuid(), 'me@example.com') RETURNING id;
--- use the returned id below
-INSERT INTO database_mappings (owner_type, owner_id, sqld_namespace)
-  VALUES ('user', '<id from above>', 'myns');
-```
-
-3. Generate an API key. There's no CLI for this yet — `hivemind_gateway::auth::generate_api_key()`
-   is the function that does it (argon2-hashes it, returns `(full_key, prefix, hash)`);
-   for now, calling it means a one-off `cargo test`-style scratch binary or REPL,
-   the same way the integration tests do it (see `tests/auth_test.rs`). Insert
-   the returned `prefix`/`hash` into `api_keys` (with the same `owner_type`/`owner_id`
-   as the mapping above), and keep `full_key` — it's shown once, only the hash
-   is stored.
+`POST /users` is public — no `Authorization` header, because this is how a
+caller gets their first API key at all. One call creates the user, mints a
+personal API key, and provisions that user's own sqld namespace:
 
 ```sh
-curl -H "Authorization: Bearer <full_key>" http://127.0.0.1:8787/some/sqld/path
+curl -X POST http://127.0.0.1:8787/users \
+  -H "Content-Type: application/json" \
+  -d '{"email":"me@example.com"}'
+# -> 201 {"user_id":"<uuid>","api_key":"hm_live_..."}
 ```
+
+The `api_key` is shown exactly once — only its argon2 hash is stored — and
+proxies straight through from then on:
+
+```sh
+curl -H "Authorization: Bearer hm_live_..." http://127.0.0.1:8787/some/sqld/path
+```
+
+Re-registering an address that already exists returns `409`, not `500`.
+
+The account and key are committed *before* the sqld call, so a `201` is real
+even if sqld is briefly down. In that case the namespace lands on a later tick
+of the in-process background worker instead, and requests with the new key get
+the usual "no mapping" `404` until it does — see
+`docs/superpowers/specs/2026-08-12-database-provisioning-design.md` for the
+outbox design behind that.
+
+Hand-seeding `database_mappings`/`api_keys` via psql still works and is still
+the only route for a `workspace`-owned mapping (deliberately not provisioned —
+see the design spec), but it's no longer needed for the ordinary case.
 
 ### Org-shared namespaces and custom roles
 
-A personal API key can also reach an org's shared namespace by sending an
-`X-Org-Id: <org uuid>` header with the request — the gateway checks the
-caller's role in that org before proxying. There's still no self-service org
-*creation*; seed the org, its `database_mappings` row (`owner_type = 'org'`),
-and its first role by hand:
+`POST /orgs` creates an org, provisions its namespace, and makes the caller its
+`owner` with every permission in the catalog. It's authenticated, and only a
+*personal* key may call it:
 
-```sql
-INSERT INTO orgs (id, name) VALUES (gen_random_uuid(), 'Acme Inc') RETURNING id;
-INSERT INTO database_mappings (owner_type, owner_id, sqld_namespace)
-  VALUES ('org', '<org id>', 'acme-namespace');
-INSERT INTO roles (id, org_id, name) VALUES (gen_random_uuid(), '<org id>', 'owner') RETURNING id;
-INSERT INTO role_permissions (role_id, permission) VALUES
-  ('<role id>', 'org:manage_members'),
-  ('<role id>', 'org:manage_roles'),
-  ('<role id>', 'db:query'),
-  ('<role id>', 'db:sync');
-INSERT INTO org_members (org_id, user_id, role_id) VALUES ('<org id>', '<user id>', '<role id>');
+```sh
+curl -X POST http://127.0.0.1:8787/orgs \
+  -H "Authorization: Bearer hm_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Acme Inc"}'
+# -> 201 {"org_id":"<uuid>"}
+```
+
+No second API key is minted: a personal API key reaches an org's shared
+namespace by sending an `X-Org-Id: <org uuid>` header with the request, and
+the gateway checks the caller's role in that org before proxying.
+
+```sh
+curl -H "Authorization: Bearer hm_live_..." -H "X-Org-Id: <org id>" \
+  http://127.0.0.1:8787/some/sqld/path
 ```
 
 From there, that user's own personal key can manage roles over HTTP:
 
 ```sh
 curl -X POST http://127.0.0.1:8787/orgs/<org id>/roles \
-  -H "Authorization: Bearer <full_key>" \
+  -H "Authorization: Bearer hm_live_..." \
   -H "Content-Type: application/json" \
   -d '{"name":"analyst","permissions":["db:query"]}'
 ```
@@ -129,5 +135,7 @@ pre-existing bad row on connect.
 | `src/proxy.rs` | Streaming reverse-proxy to sqld (HTTP/1.1 and h2c) |
 | `src/roles.rs` | Permission catalog, role CRUD, the org-membership permission check |
 | `src/org_admin.rs` | HTTP endpoints for role management and member-role assignment |
+| `src/registration.rs` | `POST /users` and `POST /orgs` — the account/org creation endpoints |
+| `src/provisioning.rs` | Namespace provisioning: the outbox row, `attempt_provisioning`, the background retry worker |
 | `migrations/` | Postgres schema, applied automatically via `sqlx::migrate!` |
 | `docs/superpowers/` | Design specs and implementation plans for each slice built so far |

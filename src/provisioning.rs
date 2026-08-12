@@ -1,3 +1,4 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use sqlx::PgPool;
@@ -21,6 +22,42 @@ pub struct OutboxRow {
 /// escape hatches, e.g. `scripts/reset-dev-db.sh`).
 const MAX_PROVISIONING_ATTEMPTS: i32 = 10;
 
+/// How long to wait for a TCP connection to sqld's admin API.
+const ADMIN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ceiling on a whole admin-API round trip (connect, send, response body).
+/// Without it, a *hung* — as opposed to refused — admin API stalls
+/// `POST /users`' inline attempt forever, and, worse, wedges [`run_worker`]'s
+/// serial loop permanently: the durability guarantee this entire outbox
+/// exists for would silently die until the process restarts. Same reasoning
+/// and same tier of values as `src/proxy.rs`'s `CONNECT_TIMEOUT` /
+/// `RESPONSE_HEAD_TIMEOUT`.
+const ADMIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Built once for the process, not per call — the timeouts above belong
+/// somewhere no call site can forget them, and rebuilding a client per attempt
+/// rebuilds its whole connector every time.
+///
+/// Idle connection reuse is deliberately **off** (`pool_max_idle_per_host(0)`).
+/// sqld's admin API closes idle keep-alive connections, and handing a request
+/// to one that the server has already closed surfaces as a transport error
+/// *after* the request went out — which for `POST .../create` is the worst
+/// possible failure mode: the namespace really does get created, the response
+/// is lost, `record_failure` marks the row `pending`, and every retry
+/// thereafter gets a 400 (namespace already exists) until the row exhausts its
+/// attempts and parks at `failed`. This showed up as real, repeatable
+/// registration-test failures. This endpoint is called about once per
+/// registration plus once per worker tick, so a fresh connection each time
+/// costs nothing worth having next to that.
+static PROVISIONING_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(ADMIN_CONNECT_TIMEOUT)
+        .timeout(ADMIN_REQUEST_TIMEOUT)
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("reqwest client construction with these settings cannot fail")
+});
+
 /// Attempts to provision `row`'s namespace: calls sqld's admin API to create
 /// it, then — on success — records the `database_mappings` row and marks the
 /// outbox row `done`, both in one transaction. On failure, bumps `attempts`
@@ -37,8 +74,7 @@ pub async fn attempt_provisioning(
     sqld_admin_url: &str,
     row: &OutboxRow,
 ) -> Result<bool, sqlx::Error> {
-    let client = reqwest::Client::new();
-    let create_result = client
+    let create_result = PROVISIONING_CLIENT
         .post(format!(
             "{}/v1/namespaces/{}/create",
             sqld_admin_url.trim_end_matches('/'),
@@ -88,6 +124,23 @@ pub async fn attempt_provisioning(
     }
 }
 
+/// Records a failed attempt against `row`.
+///
+/// The `AND status = 'pending'` guard is load-bearing, not defensive noise.
+/// The inline attempt and the background worker can both be in flight for the
+/// same row: the worker wins the race, creates the namespace and marks the row
+/// `done`, and only then does the inline attempt's request come back — with an
+/// HTTP 400, because sqld's admin API rejects a `create` for a namespace that
+/// already exists. Without the guard that late failure unconditionally drags a
+/// correctly-provisioned row from `done` back to `pending`, the worker re-picks
+/// it up, gets 400 every time, and eventually parks it at `failed` — a fully
+/// working tenant whose outbox row lies about it. With the guard, a
+/// `record_failure` that arrives after the row already reached `done` (or
+/// `failed`) is simply a no-op.
+///
+/// This is deliberately *not* row-level locking: there is one gateway process
+/// today, and `SELECT ... FOR UPDATE SKIP LOCKED` in [`fetch_pending`] is a
+/// multi-replica concern that no deployment has yet.
 async fn record_failure(pool: &PgPool, row: &OutboxRow, error: &str) -> Result<(), sqlx::Error> {
     let attempts = row.attempts + 1;
     let status = if attempts >= MAX_PROVISIONING_ATTEMPTS {
@@ -98,7 +151,7 @@ async fn record_failure(pool: &PgPool, row: &OutboxRow, error: &str) -> Result<(
     sqlx::query(
         "UPDATE namespace_provisioning_outbox
          SET attempts = $1, last_error = $2, status = $3, updated_at = now()
-         WHERE id = $4",
+         WHERE id = $4 AND status = 'pending'",
     )
     .bind(attempts)
     .bind(error)

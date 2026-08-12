@@ -59,7 +59,11 @@ fn parse_permissions(raw: &[String]) -> Result<Vec<Permission>, Response> {
 /// A duplicate role name in the same org hits `roles`' `UNIQUE (org_id,
 /// name)`. That's a client-correctable conflict, not a gateway fault, so it
 /// gets 409 rather than the blanket 500 every other `sqlx::Error` gets.
-fn is_unique_violation(err: &sqlx::Error) -> bool {
+///
+/// `pub(crate)` because `src/registration.rs` applies the identical rule to
+/// `users.email`'s uniqueness — same pattern as `roles::insert_role_permissions`
+/// being widened for reuse rather than copied.
+pub(crate) fn is_unique_violation(err: &sqlx::Error) -> bool {
     err.as_database_error()
         .map(|e| e.is_unique_violation())
         .unwrap_or(false)
