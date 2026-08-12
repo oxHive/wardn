@@ -20,6 +20,12 @@
 //! would ride the connection back into the pool still held and wedge every
 //! test that came after it.
 
+// Every test binary that does `mod common;` compiles this whole file but uses
+// only the helpers it needs — the outbox lock belongs to the provisioning and
+// registration tests, the usage-event capture to the metering tests. Without
+// this, each binary warns about the other's items being unused.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

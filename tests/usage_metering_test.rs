@@ -123,37 +123,155 @@ async fn successful_query_request_emits_a_usage_event() {
     assert_eq!(event["namespace"], user_id.to_string());
     assert_eq!(event["protocol"], "query");
     assert_eq!(event["status"], "200");
+    let ms: u64 = event
+        .get("duration_ms")
+        .unwrap_or_else(|| panic!("expected a duration_ms field: {event:?}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("duration_ms should parse as a number: {e}"));
     assert!(
-        event.contains_key("duration_ms"),
-        "expected a duration_ms field: {event:?}"
+        ms < 30_000,
+        "duration_ms should be well under the 30s response-head timeout: {ms}"
     );
 
     delete_namespace(&user_id.to_string()).await;
 }
 
+/// Pairs the rejected request with an accepted one inside the *same* capture:
+/// asserting only `events.is_empty()` would pass just as happily if the
+/// capture machinery itself were broken (a multi-threaded test runtime, a
+/// drifted target string), which would make the "only requests that reach sqld
+/// are billable" property untested rather than proven.
 #[tokio::test]
 async fn rejected_request_does_not_emit_a_usage_event() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
     let app = hivemind_gateway::app(state);
 
-    let (resp, events) = common::capture_usage_events(|| {
-        app.oneshot(
+    let (user_id, api_key) =
+        register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
+
+    let ((rejected, accepted), events) = common::capture_usage_events(|| async {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let accepted = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        (rejected, accepted)
+    })
+    .await;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    assert_eq!(
+        events.len(),
+        1,
+        "only the accepted request may emit a usage event: {events:?}"
+    );
+    let event = &events[0];
+    assert_eq!(event["owner_id"], user_id.to_string());
+    assert_eq!(event["namespace"], user_id.to_string());
+    assert_eq!(event["status"], "200");
+
+    delete_namespace(&user_id.to_string()).await;
+}
+
+/// Accepts TCP connections and then holds them open forever, never writing a
+/// byte back. That is precisely the shape `RESPONSE_HEAD_TIMEOUT` exists for:
+/// the connection to sqld succeeds (so this is *not* the transport-error
+/// `BAD_GATEWAY` arm), and hyper then waits for a response head that never
+/// arrives.
+///
+/// Returns its URL plus a receiver that fires once per accepted connection —
+/// the test needs to know when the proxy has got that far, see below.
+async fn spawn_black_hole_sqld() -> (String, tokio::sync::mpsc::UnboundedReceiver<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (accepted_tx, accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+            let _ = accepted_tx.send(());
+        }
+    });
+    (format!("http://{addr}"), accepted_rx)
+}
+
+/// A response-head timeout still reached sqld and consumed real time there, so
+/// it is metered — see the emission comment in `src/proxy.rs`.
+#[tokio::test]
+async fn response_head_timeout_emits_a_504_usage_event() {
+    let pool = test_pool().await;
+    // Only the *proxy* leg points at the black hole; `sqld_admin_url` stays
+    // real, since registration provisions the namespace through it.
+    let (black_hole, mut accepted) = spawn_black_hole_sqld().await;
+    let state = AppState::new(pool.clone(), black_hole).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let (user_id, api_key) =
+        register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
+
+    let (resp, events) = common::capture_usage_events(|| async {
+        let request = tokio::spawn(app.clone().oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
                 .unwrap(),
-        )
+        ));
+
+        // Wait until the proxy has actually opened its connection to the black
+        // hole: that means auth and namespace resolution — real Postgres I/O —
+        // are done, and `RESPONSE_HEAD_TIMEOUT`'s timer is armed.
+        accepted.recv().await.expect("proxy never connected to sqld");
+
+        // Only now switch to virtual time. From here the runtime has nothing
+        // left to poll (the black hole will never answer), so tokio jumps the
+        // clock straight to that 30s deadline and the real timeout arm runs in
+        // milliseconds instead of sitting out half a minute. Pausing any
+        // earlier makes tokio auto-advance through the *Postgres* wait too,
+        // firing sqlx's own timeouts and failing the request with a 500.
+        tokio::time::pause();
+
+        request.await.unwrap().unwrap()
     })
     .await;
-    let resp = resp.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert!(
-        events.is_empty(),
-        "a rejected request must not emit a usage event: {events:?}"
+    assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+
+    assert_eq!(
+        events.len(),
+        1,
+        "a response-head timeout must emit exactly one usage event: {events:?}"
     );
+    let event = &events[0];
+    assert_eq!(event["status"], "504");
+    assert_eq!(event["owner_id"], user_id.to_string());
+    assert_eq!(event["namespace"], user_id.to_string());
+    assert_eq!(event["protocol"], "query");
+
+    delete_namespace(&user_id.to_string()).await;
 }
 
 #[tokio::test]

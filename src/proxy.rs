@@ -251,6 +251,54 @@ pub async fn proxy_handler(
 
     let (client, outbound_version) = state.client.for_version(parts.version);
 
+    // One usage event per request that actually reached sqld — see
+    // docs/superpowers/specs/2026-08-12-usage-metering-design.md. Defined
+    // here, called from the two places below that qualify:
+    //
+    // * the normal path, once sqld's response head is in hand;
+    // * the response-head timeout (`GATEWAY_TIMEOUT`), which *does* count —
+    //   the connection to sqld was established and it spent the full
+    //   `RESPONSE_HEAD_TIMEOUT` working on the request, consuming real
+    //   database-side resources.
+    //
+    // Everything that returns *before* this point does not emit:
+    // auth/permission/namespace-resolution rejections and malformed-header
+    // failures never reached sqld at all. Neither does the transport-level
+    // failure arm (`BAD_GATEWAY`) — deliberately, not by omission: a hyper
+    // error before any response is ambiguous between "connection refused, sqld
+    // never saw it" and "reached sqld, then the connection broke", and the
+    // design spec doesn't make that call, so it stays unmetered.
+    //
+    // `duration_ms` measures request entry (after `auth_middleware`) to
+    // response *head*, not full transfer — on the `sync` path, where the
+    // streaming gRPC body is the long-lived part, it says very little about
+    // how long the request really took.
+    //
+    // Note also that `usage` events ride the same subscriber and level as
+    // ordinary logs: a deployment that raises the level floor above `INFO`
+    // (via `RUST_LOG`, see `src/main.rs`) silently stops metering.
+    let emit_usage_event = |status: StatusCode| {
+        let protocol = if outbound_version == Version::HTTP_2 {
+            "sync"
+        } else {
+            "query"
+        };
+        let org_id_field = org_id_for_usage
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        tracing::info!(
+            target: "usage",
+            owner_type = %owner.owner_type,
+            owner_id = %owner.owner_id,
+            org_id = %org_id_field,
+            namespace = %namespace,
+            protocol,
+            status = status.as_u16() as u64,
+            duration_ms = start.elapsed().as_millis() as u64,
+            "usage event"
+        );
+    };
+
     // `Host` only means anything on the Hrana/HTTP endpoints, which are
     // HTTP/1.1 only in practice — and RFC 9113 §8.3.1 treats an HTTP/2
     // request carrying both `:authority` (derived from `target` below) and a
@@ -316,6 +364,7 @@ pub async fn proxy_handler(
                 "proxy request to sqld timed out after {RESPONSE_HEAD_TIMEOUT:?} \
                  waiting for a response"
             );
+            emit_usage_event(StatusCode::GATEWAY_TIMEOUT);
             return StatusCode::GATEWAY_TIMEOUT.into_response();
         }
     };
@@ -329,30 +378,7 @@ pub async fn proxy_handler(
         &[header::CONTENT_LENGTH, header::TRANSFER_ENCODING],
     );
 
-    // One usage event per request that actually reached sqld — see
-    // docs/superpowers/specs/2026-08-12-usage-metering-design.md. Emitted
-    // here, not earlier: every early `return` above is a request that never
-    // consumed database resources (auth/permission/namespace-resolution
-    // rejections, malformed headers), and isn't a billable event.
-    let protocol = if outbound_version == Version::HTTP_2 {
-        "sync"
-    } else {
-        "query"
-    };
-    let org_id_field = org_id_for_usage
-        .map(|id| id.to_string())
-        .unwrap_or_default();
-    tracing::info!(
-        target: "usage",
-        owner_type = %owner.owner_type,
-        owner_id = %owner.owner_id,
-        org_id = %org_id_field,
-        namespace = %namespace,
-        protocol,
-        status = upstream_parts.status.as_u16() as u64,
-        duration_ms = start.elapsed().as_millis() as u64,
-        "usage event"
-    );
+    emit_usage_event(upstream_parts.status);
 
     // `Body::new` keeps the upstream body as a stream *and* passes its trailer
     // frame through — gRPC carries its `grpc-status`/`grpc-message` in HTTP/2

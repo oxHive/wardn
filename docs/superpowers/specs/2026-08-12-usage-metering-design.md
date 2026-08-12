@@ -31,7 +31,7 @@ One `tracing::info!` call, with `target: "usage"`, emitted from `proxy_handler` 
 |---|---|---|
 | `owner_type` | string | The authenticated caller's owner type (`"user"`, `"workspace"`, or `"org"`) |
 | `owner_id` | string (UUID) | The authenticated caller's id |
-| `org_id` | string (UUID), optional | Present only when the request used `X-Org-Id` (org-shared namespace access) |
+| `org_id` | string (UUID) | Always present: the org id when the request used `X-Org-Id` (org-shared namespace access), the empty string otherwise. Emitting the key unconditionally keeps the event schema stable for a downstream parser, which an optional key would not |
 | `namespace` | string | The resolved sqld namespace the request was proxied to |
 | `protocol` | string | `"query"` (Hrana/HTTP1.1) or `"sync"` (h2c/gRPC replication) — mirrors the existing `db:query`/`db:sync` permission split |
 | `status` | number | The HTTP status code returned to the client |

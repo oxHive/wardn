@@ -177,6 +177,15 @@ over time. `scripts/reset-dev-db.sh` truncates everything if that becomes a
 problem, or if migration `0002`'s namespace-format check ever rejects a
 pre-existing bad row on connect.
 
+### Logging
+
+Logs are NDJSON — one JSON object per line, the shape log aggregators expect.
+`RUST_LOG` controls verbosity as usual (`RUST_LOG=debug cargo run`), defaulting
+to `info` when unset. Usage-metering events are ordinary log lines carrying
+`target: "usage"`, which is how a downstream pipeline selects them out of the
+stream; they share the level floor with every other log, so raising it above
+`info` also stops metering.
+
 ## Project layout
 
 | Path | Responsibility |
