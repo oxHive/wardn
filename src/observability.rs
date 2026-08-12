@@ -5,21 +5,34 @@
 use std::time::Duration;
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
 use crate::auth::AppState;
 
 /// Renders the process's Prometheus metrics as exposition-format text.
-/// Unauthenticated, registered outside `auth_middleware` in `src/lib.rs`
-/// alongside `/healthz`.
-pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+/// Registered outside `auth_middleware` in `src/lib.rs` alongside
+/// `/healthz`, so it checks its own bearer token here instead: the
+/// per-tenant `namespace` label on proxy metrics (`record_proxy_metrics`)
+/// would otherwise let anyone enumerate every tenant's UUID and traffic
+/// volume through this endpoint. `state.metrics_token` empty (the default
+/// from `AppState::new`) fails closed — every request is rejected until
+/// `main.rs` sets a real token via `with_metrics_token`.
+pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if state.metrics_token.is_empty() || token != Some(state.metrics_token.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     let body = state.metrics_handle.render();
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         body,
     )
+        .into_response()
 }
 
 /// Increments `gateway_proxy_requests_in_flight` on construction and

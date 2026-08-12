@@ -6,6 +6,7 @@ pub struct Config {
     pub sqld_url: String,
     pub sqld_admin_url: String,
     pub listen_addr: String,
+    pub metrics_token: String,
 }
 
 impl Config {
@@ -17,6 +18,7 @@ impl Config {
                 .context("SQLD_ADMIN_URL must be set")?,
             listen_addr: std::env::var("LISTEN_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8787".to_string()),
+            metrics_token: std::env::var("METRICS_TOKEN").context("METRICS_TOKEN must be set")?,
         })
     }
 }

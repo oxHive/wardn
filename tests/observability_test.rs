@@ -22,16 +22,20 @@ fn admin_url() -> String {
 }
 
 #[tokio::test]
-async fn metrics_endpoint_returns_prometheus_text_unauthenticated() {
+async fn metrics_endpoint_requires_valid_bearer_token() {
     let pool = test_pool().await;
     let handle = common::metrics_handle();
     let state = AppState::new(pool, test_sqld_url())
         .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle);
+        .with_metrics_handle(handle)
+        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = hivemind_gateway::app(state);
 
-    // No Authorization header — proves this route sits outside auth_middleware.
+    // No Authorization header at all — rejected by metrics_handler's own
+    // token check (this route sits outside auth_middleware, so it must
+    // check for itself).
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/metrics")
@@ -40,7 +44,36 @@ async fn metrics_endpoint_returns_prometheus_text_unauthenticated() {
         )
         .await
         .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
+    // Wrong token.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header(header::AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct token.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", common::TEST_METRICS_TOKEN),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let content_type = resp.headers().get(header::CONTENT_TYPE).unwrap();
     assert!(content_type.to_str().unwrap().starts_with("text/plain"));
@@ -88,7 +121,8 @@ async fn successful_request_increments_counter_and_histogram() {
     let handle = common::metrics_handle();
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle.clone());
+        .with_metrics_handle(handle.clone())
+        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = hivemind_gateway::app(state);
 
     let (user_id, api_key) =
@@ -139,7 +173,8 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     let handle = common::metrics_handle();
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle.clone());
+        .with_metrics_handle(handle.clone())
+        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = hivemind_gateway::app(state);
 
     let (user_id, api_key) =
@@ -169,23 +204,30 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
         "gauge did not return to baseline after a successful request"
     );
 
-    // Rejected before reaching sqld (no Authorization header) — the guard
-    // must still fire even on a path that never calls record_proxy_metrics.
+    // Authenticated, but rejected *inside* `proxy_handler` itself (a
+    // malformed `x-org-id` hits the `Some(Err(())) => BAD_REQUEST` arm in
+    // `src/proxy.rs`, after `InFlightGuard::new()` has already run) — proves
+    // the guard decrements on an early-return path inside the handler, not
+    // just on the happy path. A request rejected by `auth_middleware` before
+    // it ever reaches `proxy_handler` wouldn't exercise the guard at all, so
+    // that case doesn't belong here.
     let resp = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .header("x-org-id", "not-a-uuid")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         common::extract_unlabeled_metric(&handle.render(), "gateway_proxy_requests_in_flight"),
         baseline,
-        "gauge did not return to baseline after a rejected request"
+        "gauge did not return to baseline after a request rejected inside proxy_handler"
     );
     drop(_guard);
 

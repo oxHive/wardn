@@ -37,6 +37,15 @@ pub struct AppState {
     /// crate actually feed. A handle not tied to the global recorder still
     /// renders successfully, just always as empty output.
     pub metrics_handle: PrometheusHandle,
+    /// Shared secret required as `Authorization: Bearer <token>` on `GET
+    /// /metrics` (`src/observability.rs`) — added because the per-tenant
+    /// `namespace` label on proxy metrics would otherwise let anyone
+    /// enumerate every tenant's UUID and traffic volume through an
+    /// unauthenticated endpoint. Defaults to empty via `new`, which makes
+    /// `metrics_handler` reject every request (fail closed) until
+    /// `with_metrics_token` sets a real value — `main.rs` does this from
+    /// `Config::metrics_token`.
+    pub metrics_token: String,
 }
 
 impl AppState {
@@ -48,6 +57,7 @@ impl AppState {
             sqld_admin_url: String::new(),
             client: ProxyClient::new(),
             metrics_handle,
+            metrics_token: String::new(),
         }
     }
 
@@ -58,6 +68,11 @@ impl AppState {
 
     pub fn with_metrics_handle(mut self, metrics_handle: PrometheusHandle) -> Self {
         self.metrics_handle = metrics_handle;
+        self
+    }
+
+    pub fn with_metrics_token(mut self, metrics_token: String) -> Self {
+        self.metrics_token = metrics_token;
         self
     }
 }

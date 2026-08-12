@@ -167,6 +167,12 @@ pub fn metrics_handle() -> PrometheusHandle {
     METRICS_HANDLE.clone()
 }
 
+/// Fixed bearer token every test that builds an `AppState` touching `GET
+/// /metrics` should pass to `AppState::with_metrics_token` — `metrics_handler`
+/// (`src/observability.rs`) now fails closed (401) when `metrics_token` is
+/// empty, so any such test must set a real value to reach the 200 path.
+pub const TEST_METRICS_TOKEN: &str = "test-metrics-token";
+
 /// Parses a single **unlabeled** gauge/counter value out of Prometheus text
 /// exposition format — a line of exactly `metric_name value`, no `{...}`
 /// label block. Returns `0.0` if the metric has no samples yet in this
