@@ -8,7 +8,7 @@ const PROVISIONING_WORKER_INTERVAL: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().json().init();
     let config = Config::from_env()?;
     let pool = db::connect(&config.database_url).await?;
 
