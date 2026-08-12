@@ -33,6 +33,7 @@ services:
       # from the gateway container by service name on their internal ports.
       DATABASE_URL: postgres://gateway:gateway@postgres:5432/gateway
       SQLD_URL: http://sqld:8080
+      SQLD_ADMIN_URL: http://sqld:8090
       LISTEN_ADDR: 0.0.0.0:8787
     # The gateway is the one service meant to be reachable — still loopback
     # only here since this compose file is for local dev, not production.

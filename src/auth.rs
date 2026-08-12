@@ -20,6 +20,12 @@ pub struct AppState {
     /// that it is configured exactly once, in one place, and tests can point
     /// it wherever they like.
     pub sqld_url: String,
+    /// Base URL of sqld's admin API, e.g. `http://127.0.0.1:8090` — used by
+    /// database provisioning (`src/provisioning.rs`) to create a namespace.
+    /// Defaults to empty via `new`; set it with `with_sqld_admin_url` where
+    /// provisioning is actually exercised (`main.rs`, provisioning tests).
+    /// Every other existing test/call site is unaffected by its absence.
+    pub sqld_admin_url: String,
     /// Pooled outbound HTTP clients, shared by every request.
     pub client: ProxyClient,
 }
@@ -29,8 +35,14 @@ impl AppState {
         Self {
             pool,
             sqld_url,
+            sqld_admin_url: String::new(),
             client: ProxyClient::new(),
         }
+    }
+
+    pub fn with_sqld_admin_url(mut self, sqld_admin_url: String) -> Self {
+        self.sqld_admin_url = sqld_admin_url;
+        self
     }
 }
 
