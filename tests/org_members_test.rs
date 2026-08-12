@@ -166,6 +166,323 @@ async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
 }
 
 #[tokio::test]
+async fn list_members_shows_the_owner_and_the_invited_member() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let owner_email = format!("owner-{}@example.com", uuid::Uuid::new_v4());
+    let (owner_id, owner_key) = register(app.clone(), &owner_email).await;
+    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id: uuid::Uuid = org_id_str.parse().unwrap();
+    let role_id = bootstrap_role_id(&pool, org_id).await;
+
+    let invitee_email = format!("invitee-{}@example.com", uuid::Uuid::new_v4());
+    let (invitee_id, _invitee_key) = register(app.clone(), &invitee_email).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/members"))
+                .header(header::AUTHORIZATION, format!("Bearer {owner_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{invitee_email}","role_id":"{role_id}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/orgs/{org_id}/members"))
+                .header(header::AUTHORIZATION, format!("Bearer {owner_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let members: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let members = members.as_array().unwrap();
+    assert_eq!(members.len(), 2, "expected the owner plus the invitee: {members:?}");
+
+    let find = |id: uuid::Uuid| {
+        members
+            .iter()
+            .find(|m| m["user_id"].as_str().unwrap() == id.to_string())
+            .unwrap_or_else(|| panic!("member {id} missing from listing: {members:?}"))
+    };
+    let owner_row = find(owner_id);
+    assert_eq!(owner_row["email"].as_str().unwrap(), owner_email);
+    // The org creator holds the bootstrap `owner` role.
+    assert_eq!(owner_row["role_id"].as_str().unwrap(), role_id.to_string());
+    let invitee_row = find(invitee_id);
+    assert_eq!(invitee_row["email"].as_str().unwrap(), invitee_email);
+    assert_eq!(invitee_row["role_id"].as_str().unwrap(), role_id.to_string());
+
+    delete_namespace(&org_id_str).await;
+}
+
+#[tokio::test]
+async fn list_members_rejects_a_caller_without_permission() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let (_owner_id, owner_key) =
+        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
+    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id: uuid::Uuid = org_id_str.parse().unwrap();
+
+    // A registered user who was never invited to this org at all.
+    let (_outsider_id, outsider_key) =
+        register(app.clone(), &format!("outsider-{}@example.com", uuid::Uuid::new_v4())).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/orgs/{org_id}/members"))
+                .header(header::AUTHORIZATION, format!("Bearer {outsider_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    delete_namespace(&org_id_str).await;
+}
+
+#[tokio::test]
+async fn add_member_accepts_a_differently_cased_email() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let (_owner_id, owner_key) =
+        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
+    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id: uuid::Uuid = org_id_str.parse().unwrap();
+    let role_id = bootstrap_role_id(&pool, org_id).await;
+
+    let invitee_email = format!("invitee-{}@example.com", uuid::Uuid::new_v4());
+    let (invitee_id, _invitee_key) = register(app.clone(), &invitee_email).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/members"))
+                .header(header::AUTHORIZATION, format!("Bearer {owner_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{}","role_id":"{role_id}"}}"#,
+                    invitee_email.to_uppercase()
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "an uppercased form of a registered address should not 404"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["user_id"].as_str().unwrap(), invitee_id.to_string());
+
+    delete_namespace(&org_id_str).await;
+}
+
+/// The Task 2 (org membership) × Task 3 (self-service keys) seam, which
+/// neither feature's own tests cover: a member minted key — not the one from
+/// registration — must reach the org's namespace, and revoking it must kill
+/// that key alone without disturbing the member's org access via their other
+/// key.
+#[tokio::test]
+async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    let (_owner_id, owner_key) =
+        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
+    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id: uuid::Uuid = org_id_str.parse().unwrap();
+    let role_id = bootstrap_role_id(&pool, org_id).await;
+
+    let member_email = format!("member-{}@example.com", uuid::Uuid::new_v4());
+    let (member_id, registration_key) = register(app.clone(), &member_email).await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orgs/{org_id}/members"))
+                .header(header::AUTHORIZATION, format!("Bearer {owner_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{member_email}","role_id":"{role_id}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // The member mints themselves a *second* personal key.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api-keys")
+                .header(header::AUTHORIZATION, format!("Bearer {registration_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let second_key = created["api_key"].as_str().unwrap().to_string();
+    let second_key_id = created["id"].as_str().unwrap().to_string();
+    assert_ne!(second_key, registration_key);
+
+    // That second key + X-Org-Id reaches the org's namespace: write, read back.
+    let secret = format!("SEAM-SECRET-{}", uuid::Uuid::new_v4());
+    let create_and_insert = format!(
+        r#"{{"statements":["CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)","INSERT INTO kv (k, v) VALUES ('seam', '{secret}')"]}}"#
+    );
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-org-id", &org_id_str)
+                .body(Body::from(create_and_insert))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "the member's self-minted key should reach the org's namespace"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-org-id", &org_id_str)
+                .body(Body::from(r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        text.contains(&secret),
+        "read-back through the self-minted key did not contain the written secret: {text}"
+    );
+
+    // The member revokes their second key.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api-keys/{second_key_id}"))
+                .header(header::AUTHORIZATION, format!("Bearer {registration_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // It can no longer authenticate at all — 401 before any org check runs.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-org-id", &org_id_str)
+                .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the revoked key should not authenticate anywhere"
+    );
+
+    // The org access story is unaffected for the member's other, live key —
+    // and it still reads back the row the revoked key wrote.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .header(header::AUTHORIZATION, format!("Bearer {registration_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-org-id", &org_id_str)
+                .body(Body::from(r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        text.contains(&secret),
+        "the member's non-revoked key lost org access after the other key was revoked: {text}"
+    );
+
+    delete_namespace(&org_id_str).await;
+    delete_namespace(&member_id.to_string()).await;
+}
+
+#[tokio::test]
 async fn add_member_rejects_an_unregistered_email() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());

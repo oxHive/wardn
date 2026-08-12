@@ -30,13 +30,17 @@ pub struct CreateKeyResponse {
 /// future workspace/org-owned key with this caller's `user_id` set must not
 /// leak into this listing. Never returns `key_hash` or anything that could
 /// reconstruct the full key.
+///
+/// `ORDER BY created_at, id` — `id` is the tiebreaker so two keys sharing a
+/// `created_at` (same transaction timestamp) still order deterministically;
+/// tests and clients alike treat position 0 as "the oldest/registration key".
 pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
     let rows: Result<Vec<ApiKeySummary>, sqlx::Error> = sqlx::query_as::<_, ApiKeySummary>(
         "SELECT id, prefix, created_at, revoked_at FROM api_keys
-         WHERE user_id = $1 AND owner_type = 'user' ORDER BY created_at",
+         WHERE user_id = $1 AND owner_type = 'user' ORDER BY created_at, id",
     )
     .bind(owner.owner_id)
     .fetch_all(&state.pool)

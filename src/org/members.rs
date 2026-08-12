@@ -21,6 +21,49 @@ pub struct MemberResponse {
     pub role_id: Uuid,
 }
 
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MemberSummary {
+    pub user_id: Uuid,
+    pub email: String,
+    pub role_id: Uuid,
+}
+
+/// `GET /orgs/:org_id/members` — lists the org's members, requiring the same
+/// `org:manage_members` permission as add/remove. Without this, an admin who
+/// knows a departing member's *email* has no HTTP route to the `user_id` that
+/// `DELETE /orgs/:org_id/members/:user_id` requires — the offboarding tool the
+/// design spec chose over key revocation would be undrivable from this
+/// feature's own API surface.
+pub async fn list_members(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+    Path(org_id): Path<Uuid>,
+) -> Response {
+    if let Err(status) =
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageMembers).await
+    {
+        return status.into_response();
+    }
+
+    let rows: Result<Vec<MemberSummary>, sqlx::Error> = sqlx::query_as::<_, MemberSummary>(
+        "SELECT om.user_id, u.email, om.role_id
+         FROM org_members om
+         JOIN users u ON u.id = om.user_id
+         WHERE om.org_id = $1
+         ORDER BY u.email",
+    )
+    .bind(org_id)
+    .fetch_all(&state.pool)
+    .await;
+    match rows {
+        Ok(members) => Json(members).into_response(),
+        Err(e) => {
+            tracing::error!("list members failed: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// `POST /orgs/:org_id/members` — adds an *already-registered* user to the
 /// org by email. There is no pending-invitation state: the email must
 /// already match a `users` row (`404` if not), and the caller must hold
@@ -38,7 +81,10 @@ pub async fn add_member(
     }
 
     let user_row: Result<Option<(Uuid,)>, sqlx::Error> =
-        sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        // Case-insensitive: an exact match would `404` ("not registered") for
+        // `Foo@Example.com` when `foo@example.com` *is* registered, which
+        // misleads the admin into thinking the invitee needs to sign up.
+        sqlx::query_as("SELECT id FROM users WHERE lower(email) = lower($1)")
             .bind(&req.email)
             .fetch_optional(&state.pool)
             .await;

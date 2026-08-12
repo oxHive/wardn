@@ -27,7 +27,10 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api-keys/{id}", delete(api_keys::revoke_key))
         .route("/orgs", post(registration::create_org))
-        .route("/orgs/{org_id}/members", post(org::members::add_member))
+        .route(
+            "/orgs/{org_id}/members",
+            get(org::members::list_members).post(org::members::add_member),
+        )
         .route(
             "/orgs/{org_id}/members/{user_id}",
             delete(org::members::remove_member),

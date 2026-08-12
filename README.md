@@ -11,9 +11,10 @@ proxy the request there. It never parses memory content or MCP protocol —
 see `docs/superpowers/specs/2026-08-11-walking-skeleton-design.md` for the
 full design and the boundary this is built to respect.
 
-**Status:** walking skeleton, plus org role enforcement and self-service
+**Status:** walking skeleton, plus org role enforcement, self-service
 database provisioning (`POST /users` and `POST /orgs` now create their own
-sqld namespaces — no more hand-seeding). Billing, rate limiting, a general
+sqld namespaces — no more hand-seeding), org membership management, and
+self-service API keys. Billing, rate limiting, a general
 admin API, and observability/alerting don't exist yet — see the memory entries
 tagged `project:hivemind-gateway` for the current state and plan, or
 `docs/superpowers/plans/2026-08-11-walking-skeleton.md` for how this was built.
@@ -109,6 +110,57 @@ client holding only `db:query` gets a 403; that is the documented, intentional
 behaviour rather than a permissions bug. Grant a role both permissions if its
 holders will use both transports.
 
+### Org membership and self-service API keys
+
+Adding someone to an org means adding an *already-registered* user — there is
+no pending-invitation flow, so the address must already match a `users` row
+(`404` if it doesn't). Both endpoints below need `org:manage_members`:
+
+```sh
+curl -X POST http://127.0.0.1:8787/orgs/<org id>/members \
+  -H "Authorization: Bearer hm_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"email":"teammate@example.com","role_id":"<role id>"}'
+# -> 201 {"user_id":"<uuid>","role_id":"<uuid>"}
+```
+
+Email matching is case-insensitive. Re-adding an existing member is `409`.
+
+`GET /orgs/<org id>/members` lists the org's members as
+`[{ user_id, email, role_id }]` — that's how you turn a departing colleague's
+email into the `user_id` the removal endpoint wants:
+
+```sh
+curl -H "Authorization: Bearer hm_live_..." \
+  http://127.0.0.1:8787/orgs/<org id>/members
+```
+
+Offboarding is member removal, not key revocation — an org admin has no reach
+into a member's personal keys by design, since those also open the holder's own
+namespace and any other org they belong to:
+
+```sh
+curl -X DELETE -H "Authorization: Bearer hm_live_..." \
+  http://127.0.0.1:8787/orgs/<org id>/members/<user id>
+# -> 204; their account, personal key, and other orgs are untouched
+```
+
+Keys are managed by their own holder only. `GET /api-keys` lists the caller's
+own keys (`id`, `prefix`, `created_at`, `revoked_at` — never the key itself or
+its hash), `POST /api-keys` mints an additional one, and
+`DELETE /api-keys/<id>` revokes one:
+
+```sh
+curl -X POST -H "Authorization: Bearer hm_live_..." \
+  http://127.0.0.1:8787/api-keys
+# -> 201 {"id":"<uuid>","api_key":"hm_live_..."}   (shown exactly once)
+```
+
+**Revoking your last live key locks you out permanently.** There is
+deliberately no guard against it and no recovery path over HTTP — `POST /users`
+`409`s on an address that's already registered — so getting back in takes
+direct SQL. Mint a replacement key *before* revoking the one you're holding.
+
 ## Development
 
 ```sh
@@ -134,7 +186,9 @@ pre-existing bad row on connect.
 | `src/routing.rs` | Resolves an authenticated owner to a sqld namespace |
 | `src/proxy.rs` | Streaming reverse-proxy to sqld (HTTP/1.1 and h2c) |
 | `src/roles.rs` | Permission catalog, role CRUD, the org-membership permission check |
-| `src/org_admin.rs` | HTTP endpoints for role management and member-role assignment |
+| `src/org/admin.rs` | HTTP endpoints for role management and member-role assignment |
+| `src/org/members.rs` | HTTP endpoints to add, list, and remove an org's members |
+| `src/api_keys.rs` | Self-service API key management — list, mint, revoke your own keys |
 | `src/registration.rs` | `POST /users` and `POST /orgs` — the account/org creation endpoints |
 | `src/provisioning.rs` | Namespace provisioning: the outbox row, `attempt_provisioning`, the background retry worker |
 | `migrations/` | Postgres schema, applied automatically via `sqlx::migrate!` |
