@@ -1,0 +1,122 @@
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::auth::{AppState, AuthedOwner};
+use crate::org::admin::is_unique_violation;
+use crate::roles::{self, Permission};
+
+#[derive(Deserialize)]
+pub struct AddMemberRequest {
+    pub email: String,
+    pub role_id: Uuid,
+}
+
+#[derive(Serialize)]
+pub struct MemberResponse {
+    pub user_id: Uuid,
+    pub role_id: Uuid,
+}
+
+/// `POST /orgs/:org_id/members` — adds an *already-registered* user to the
+/// org by email. There is no pending-invitation state: the email must
+/// already match a `users` row (`404` if not), and the caller must hold
+/// `org:manage_members`.
+pub async fn add_member(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+    Path(org_id): Path<Uuid>,
+    Json(req): Json<AddMemberRequest>,
+) -> Response {
+    if let Err(status) =
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageMembers).await
+    {
+        return status.into_response();
+    }
+
+    let user_row: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("SELECT id FROM users WHERE email = $1")
+            .bind(&req.email)
+            .fetch_optional(&state.pool)
+            .await;
+    let user_id = match user_row {
+        Ok(Some((id,))) => id,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("user lookup by email failed: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let role_row: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
+            .bind(req.role_id)
+            .bind(org_id)
+            .fetch_optional(&state.pool)
+            .await;
+    match role_row {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("role lookup failed: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    match sqlx::query("INSERT INTO org_members (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+        .bind(org_id)
+        .bind(user_id)
+        .bind(req.role_id)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(MemberResponse {
+                user_id,
+                role_id: req.role_id,
+            }),
+        )
+            .into_response(),
+        Err(e) if is_unique_violation(&e) => {
+            (StatusCode::CONFLICT, "user is already a member of this org").into_response()
+        }
+        Err(e) => {
+            tracing::error!("add member failed: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `DELETE /orgs/:org_id/members/:user_id` — the offboarding tool. Deletes
+/// only the `org_members` row; never touches `users`/`api_keys`, so the
+/// removed member's personal key and any other org membership are
+/// untouched.
+pub async fn remove_member(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+    Path((org_id, user_id)): Path<(Uuid, Uuid)>,
+) -> Response {
+    if let Err(status) =
+        roles::require_permission(&state.pool, org_id, &owner, Permission::OrgManageMembers).await
+    {
+        return status.into_response();
+    }
+
+    let result = sqlx::query("DELETE FROM org_members WHERE org_id = $1 AND user_id = $2")
+        .bind(org_id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await;
+    match result {
+        Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("remove member failed: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}

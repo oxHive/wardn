@@ -11,7 +11,7 @@ pub mod routing;
 pub use auth::AppState;
 use axum::{
     Router,
-    routing::{any, get, patch, post, put},
+    routing::{any, delete, get, patch, post, put},
 };
 
 async fn healthz() -> &'static str {
@@ -21,6 +21,11 @@ async fn healthz() -> &'static str {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/orgs", post(registration::create_org))
+        .route("/orgs/{org_id}/members", post(org::members::add_member))
+        .route(
+            "/orgs/{org_id}/members/{user_id}",
+            delete(org::members::remove_member),
+        )
         .route(
             "/orgs/{org_id}/roles",
             post(org::admin::create_role).get(org::admin::list_roles),
