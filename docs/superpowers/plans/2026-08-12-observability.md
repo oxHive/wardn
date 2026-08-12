@@ -4,7 +4,7 @@
 
 **Goal:** Expose a Prometheus `/metrics` endpoint covering proxy request volume/latency, dependency health (Postgres pool, sqld reachability), and the provisioning worker's queue depth — so an operator can answer "is the service healthy" before real traffic arrives — and wire up a local Grafana + Prometheus stack in `podman-compose.yml` for testing it.
 
-**Architecture:** `metrics` (facade) + `metrics-exporter-prometheus`, recorder installed once in `main.rs`, handle threaded through `AppState` and rendered by a new unauthenticated `GET /metrics` route. All new metric-recording logic lives in one new module, `src/observability.rs`, called into from `proxy.rs` and `provisioning.rs` at their existing instrumentation points.
+**Architecture:** `metrics` (facade) + `metrics-exporter-prometheus`, recorder installed once in `main.rs`, handle threaded through `AppState` and rendered by a new `GET /metrics` route gated by a static bearer token (`METRICS_TOKEN` — added during Task 2's review as a fix for a tenant-enumeration finding; see the amendment note after Task 1). All new metric-recording logic lives in one new module, `src/observability.rs`, called into from `proxy.rs` and `provisioning.rs` at their existing instrumentation points.
 
 **Tech Stack:** Rust/axum 0.8 (edition 2024), `metrics` + `metrics-exporter-prometheus`, sqlx 0.8 (runtime-checked queries only), existing `reqwest` client for the sqld health probe.
 
@@ -13,7 +13,7 @@
 - Rust edition 2024, axum 0.8, sqlx 0.8 — runtime-checked queries only (`sqlx::query`/`query_as`, never the `query!`/`query_as!` compile-time macros).
 - `#[tokio::test]` stays the bare, single-threaded-runtime attribute in every test file — no `flavor = "multi_thread"`. Not directly load-bearing for this slice's own tests, but must not be broken for the existing usage-metering tests that depend on it.
 - Integration tests exercise real Postgres and real sqld (via `DATABASE_URL`/`SQLD_URL`/`SQLD_ADMIN_URL` env vars, defaulting to the `podman-compose.yml` dev instances) — no mocks.
-- `GET /metrics` is unauthenticated, registered outside `auth_middleware` (same as the existing `/healthz`, `/users`).
+- `GET /metrics` requires a valid `Authorization: Bearer <METRICS_TOKEN>` header, checked in `metrics_handler` itself (not via `auth_middleware`, which is for API keys — this is a single deployment-wide secret). Still registered outside `auth_middleware`'s route group, same as `/healthz`/`/users` (see the amendment note after Task 1 for why this superseded the plan's original "unauthenticated" decision).
 - Only the `namespace` label carries per-tenant cardinality; every other metric label is a small fixed set. No cardinality cap in this slice (accepted risk, per the design spec).
 - The Prometheus global recorder is installed **exactly once**, in `main.rs` — never inside `AppState::new`, `app()`, or any test helper that could run more than once per process. `AppState::new` builds its own local, non-globally-installed handle so every existing call site (production and test) keeps compiling unchanged.
 - New `podman-compose.yml` services stay loopback-bound (`127.0.0.1:...`), matching every existing service in that file.
@@ -274,6 +274,10 @@ Expected: `metrics_endpoint_returns_prometheus_text_unauthenticated` passes.
 git add Cargo.toml Cargo.lock src/observability.rs src/lib.rs src/auth.rs src/main.rs tests/observability_test.rs tests/common/mod.rs
 git commit -m "feat: add Prometheus /metrics endpoint"
 ```
+
+---
+
+**Amendment (made during Task 2's review):** Task 2's task review found that this task's unauthenticated `/metrics` route, combined with Task 2's `namespace` label, lets anyone enumerate every tenant's UUID and traffic volume, and lets anonymous `POST /users` grow the metrics recorder's per-tenant label set without bound. The human decided: gate `/metrics` behind a static bearer token rather than drop the `namespace` label or leave it unauthenticated. This changes Task 1's shipped behavior — `metrics_handler` now requires `Authorization: Bearer <METRICS_TOKEN>` — implemented as part of Task 2's fix round (touching `src/config.rs`, `src/auth.rs`, `src/main.rs`, `src/observability.rs`, and `tests/observability_test.rs`'s Task-1-authored test). See the design spec's amended "Scope decisions" section. Task 3 and Task 5 below are written to already account for this (test requests to `/metrics` include the token; the Prometheus scrape config carries it).
 
 ---
 
@@ -745,13 +749,18 @@ async fn metrics_endpoint_reports_pg_pool_gauges() {
     let handle = common::metrics_handle();
     let state = AppState::new(pool, test_sqld_url())
         .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle);
+        .with_metrics_handle(handle)
+        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = hivemind_gateway::app(state);
 
     let resp = app
         .oneshot(
             Request::builder()
                 .uri("/metrics")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", common::TEST_METRICS_TOKEN),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1037,11 +1046,13 @@ global:
 
 scrape_configs:
   - job_name: hivemind-gateway
+    authorization:
+      credentials: dev-metrics-token
     static_configs:
       - targets: ["gateway:8787"]
 ```
 
-`gateway:8787` uses compose's internal DNS — the same way the `gateway` service already reaches `postgres`/`sqld` by service name on their internal ports (see `podman-compose.yml`'s existing `DATABASE_URL`/`SQLD_URL`/`SQLD_ADMIN_URL` environment values).
+`gateway:8787` uses compose's internal DNS — the same way the `gateway` service already reaches `postgres`/`sqld` by service name on their internal ports (see `podman-compose.yml`'s existing `DATABASE_URL`/`SQLD_URL`/`SQLD_ADMIN_URL` environment values). `dev-metrics-token` matches the `METRICS_TOKEN` value set on the `gateway` service in Step 3 below — `/metrics` now requires `Authorization: Bearer <METRICS_TOKEN>` (added during Task 2's review; see the amendment note after Task 1).
 
 - [ ] **Step 2: Add the Grafana datasource provisioning file**
 
@@ -1058,9 +1069,15 @@ datasources:
     isDefault: true
 ```
 
-- [ ] **Step 3: Add both services to `podman-compose.yml`**
+- [ ] **Step 3: Add both services to `podman-compose.yml`, and give `gateway` its `METRICS_TOKEN`**
 
-Add after the existing `gateway` service block:
+`METRICS_TOKEN` is now a required environment variable for the `gateway` service (added during Task 2's review — see the amendment note after Task 1). Add it to the existing `gateway` service's `environment` block, alongside `DATABASE_URL`/`SQLD_URL`/`SQLD_ADMIN_URL`/`LISTEN_ADDR`:
+
+```yaml
+      METRICS_TOKEN: dev-metrics-token
+```
+
+Then add the two new services after the existing `gateway` service block:
 
 ```yaml
   prometheus:
@@ -1121,15 +1138,18 @@ Add a new subsection under `## Development`, after the existing `### Logging` su
 
 `GET /metrics` exposes Prometheus-format metrics: proxy request counts and
 latency (by protocol/status/namespace), Postgres pool size, sqld
-reachability, and the provisioning worker's outbox queue depth.
-Unauthenticated, like `/healthz` — same "loopback/VPC is the access
-boundary" posture as the rest of this dev stack.
+reachability, and the provisioning worker's outbox queue depth. Requires
+`Authorization: Bearer <METRICS_TOKEN>` — added because the per-tenant
+`namespace` label would otherwise let anyone reachable enumerate every
+tenant's UUID and traffic volume through an unauthenticated endpoint. Set
+`METRICS_TOKEN` to any secret string; the dev compose stack below uses
+`dev-metrics-token`.
 
 `podman-compose up` also brings up Prometheus (`127.0.0.1:9090`, scraping
-the gateway every 15s) and Grafana (`127.0.0.1:3000`, anonymous viewer
-access, Prometheus pre-wired as its datasource) for local testing. No
-dashboards ship by default — add your own in Grafana's UI, or build them
-against the metric names above.
+the gateway every 15s with that token) and Grafana (`127.0.0.1:3000`,
+anonymous viewer access, Prometheus pre-wired as its datasource) for local
+testing. No dashboards ship by default — add your own in Grafana's UI, or
+build them against the metric names above.
 ```
 
 - [ ] **Step 7: Commit**
