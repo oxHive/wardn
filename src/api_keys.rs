@@ -24,15 +24,19 @@ pub struct CreateKeyResponse {
 
 /// `GET /api-keys` — self-service only, `owner_type == "user"` (the same
 /// guard `POST /orgs` already uses — a workspace/org-owned key has no
-/// notion of "its own" additional keys in this model). Never returns
-/// `key_hash` or anything that could reconstruct the full key.
+/// notion of "its own" additional keys in this model). The query filters on
+/// the target row's `owner_type = 'user'` too, not just the caller's own —
+/// `user_id` and `owner_id`/`owner_type` are independent columns, so a
+/// future workspace/org-owned key with this caller's `user_id` set must not
+/// leak into this listing. Never returns `key_hash` or anything that could
+/// reconstruct the full key.
 pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
     let rows: Result<Vec<ApiKeySummary>, sqlx::Error> = sqlx::query_as::<_, ApiKeySummary>(
         "SELECT id, prefix, created_at, revoked_at FROM api_keys
-         WHERE user_id = $1 ORDER BY created_at",
+         WHERE user_id = $1 AND owner_type = 'user' ORDER BY created_at",
     )
     .bind(owner.owner_id)
     .fetch_all(&state.pool)
@@ -84,7 +88,11 @@ pub async fn create_key(State(state): State<AppState>, Extension(owner): Extensi
 /// `DELETE /api-keys/:id` — revokes one of the caller's own keys. `404` for
 /// a key id that exists but isn't the caller's own — never `403`, so a
 /// caller can't use the response to confirm another user's key id exists.
-/// Idempotent: revoking an already-revoked key still `204`s.
+/// The `owner_type = 'user'` guard on the target row (in addition to the
+/// caller-side check above) means a workspace/org-owned row can never be
+/// revoked through this self-service endpoint even if it happened to share
+/// this caller's `user_id`. Idempotent: revoking an already-revoked key
+/// still `204`s.
 pub async fn revoke_key(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -93,11 +101,14 @@ pub async fn revoke_key(
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let result = sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND user_id = $2")
-        .bind(key_id)
-        .bind(owner.owner_id)
-        .execute(&state.pool)
-        .await;
+    let result = sqlx::query(
+        "UPDATE api_keys SET revoked_at = now()
+         WHERE id = $1 AND user_id = $2 AND owner_type = 'user'",
+    )
+    .bind(key_id)
+    .bind(owner.owner_id)
+    .execute(&state.pool)
+    .await;
     match result {
         Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
         Ok(_) => StatusCode::NOT_FOUND.into_response(),
