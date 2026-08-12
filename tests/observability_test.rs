@@ -75,6 +75,13 @@ async fn delete_namespace(name: &str) {
         .await;
 }
 
+// Holds a `std::sync::MutexGuard` (`common::proxy_metrics_lock()`) across
+// `.await` below — safe here, and in `in_flight_gauge_returns_to_baseline_...`
+// further down, for the same reason `capture_usage_events` in
+// `tests/common/mod.rs` documents: `#[tokio::test]` defaults to a
+// single-threaded runtime, so this task never moves to a different OS thread
+// mid-poll and there is no sibling task on this runtime the lock could block.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn successful_request_increments_counter_and_histogram() {
     let pool = test_pool().await;
@@ -87,6 +94,7 @@ async fn successful_request_increments_counter_and_histogram() {
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
 
+    let _guard = common::proxy_metrics_lock();
     let resp = app
         .oneshot(
             Request::builder()
@@ -119,10 +127,12 @@ async fn successful_request_increments_counter_and_histogram() {
         ),
         "missing histogram sample: {rendered}"
     );
+    drop(_guard);
 
     delete_namespace(&user_id.to_string()).await;
 }
 
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     let pool = test_pool().await;
@@ -135,6 +145,7 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
 
+    let _guard = common::proxy_metrics_lock();
     let baseline =
         common::extract_unlabeled_metric(&handle.render(), "gateway_proxy_requests_in_flight");
 
@@ -176,6 +187,7 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
         baseline,
         "gauge did not return to baseline after a rejected request"
     );
+    drop(_guard);
 
     delete_namespace(&user_id.to_string()).await;
 }

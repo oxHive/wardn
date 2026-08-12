@@ -211,3 +211,20 @@ pub fn extract_labeled_metric(rendered: &str, metric_name: &str, must_contain: &
 pub fn has_labeled_metric(rendered: &str, metric_name: &str, must_contain: &[&str]) -> bool {
     extract_labeled_metric(rendered, metric_name, must_contain).is_some()
 }
+
+static PROXY_METRICS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serializes any test that calls `proxy_handler` (bumping the shared,
+/// unlabeled `gateway_proxy_requests_in_flight` gauge). Cargo runs tests in
+/// one binary on separate threads by default; without this, a sibling
+/// test's concurrently in-flight request can land inside another test's
+/// sample-request-sample window and desync the count. Tests that only
+/// assert on their own uniquely-labeled samples (e.g. `namespace="<uuid>"`
+/// counter/histogram values) don't need this — only tests reading the
+/// *unlabeled* in-flight gauge do, but every test that increments it must
+/// still hold the lock for the other's sake.
+pub fn proxy_metrics_lock() -> std::sync::MutexGuard<'static, ()> {
+    PROXY_METRICS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
