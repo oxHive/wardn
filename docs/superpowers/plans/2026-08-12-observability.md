@@ -669,10 +669,17 @@ pub fn refresh_pg_pool_gauges(pool: &PgPool) {
 }
 ```
 
-Update `metrics_handler` to call it first:
+By this point (after Task 2's fix round added the `METRICS_TOKEN` bearer-token check — see the amendment note after Task 1), `metrics_handler` already validates the token before doing anything else and returns early on failure. Call `refresh_pg_pool_gauges` right after that check, on the authorized path only:
 
 ```rust
-pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if state.metrics_token.is_empty() || token != Some(state.metrics_token.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     refresh_pg_pool_gauges(&state.pool);
     let body = state.metrics_handle.render();
     (
@@ -680,8 +687,11 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         body,
     )
+        .into_response()
 }
 ```
+
+(If the actual signature/body you find in `src/observability.rs` at this point differs slightly from this snippet — e.g. different variable names from how the fix round implemented it — adapt to match what's actually there; the important part is that `refresh_pg_pool_gauges` runs only after the token check passes, not before.)
 
 - [ ] **Step 2: Add `check_sqld_up` and `sqld_health_check_loop`**
 
