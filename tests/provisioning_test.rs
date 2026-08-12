@@ -244,3 +244,61 @@ async fn run_worker_eventually_provisions_a_row_the_inline_attempt_missed() {
     delete_namespace(&namespace).await;
     common::delete_outbox_row(&pool, row.id).await;
 }
+
+#[tokio::test]
+async fn attempt_provisioning_records_outcome_metrics() {
+    let pool = test_pool().await;
+    let _lock = common::lock_outbox(&pool).await;
+    let handle = common::metrics_handle();
+    let namespace = format!("provmetrics-{}", Uuid::new_v4());
+    let row = seed_outbox_row(&pool, "user", &namespace).await;
+
+    let before = common::extract_labeled_metric(
+        &handle.render(),
+        "gateway_provisioning_attempts_total",
+        &["outcome=\"success\""],
+    )
+    .unwrap_or(0.0);
+
+    let result = provisioning::attempt_provisioning(&pool, &admin_url(), &row)
+        .await
+        .unwrap();
+    assert!(result);
+
+    let after = common::extract_labeled_metric(
+        &handle.render(),
+        "gateway_provisioning_attempts_total",
+        &["outcome=\"success\""],
+    )
+    .unwrap_or(0.0);
+    assert_eq!(after, before + 1.0);
+
+    delete_namespace(&namespace).await;
+    common::delete_outbox_row(&pool, row.id).await;
+}
+
+#[tokio::test]
+async fn run_worker_tick_refreshes_outbox_gauges() {
+    let pool = test_pool().await;
+    let _lock = common::lock_outbox(&pool).await;
+    let handle = common::metrics_handle();
+    let namespace = format!("provgauge-{}", Uuid::new_v4());
+    let row = seed_outbox_row(&pool, "user", &namespace).await;
+
+    tokio::spawn(provisioning::run_worker(
+        pool.clone(),
+        admin_url(),
+        Duration::from_millis(200),
+    ));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let rendered = handle.render();
+    assert!(rendered.contains("gateway_provisioning_outbox_pending "));
+    assert!(rendered.contains("gateway_provisioning_outbox_failed "));
+
+    let (status, _attempts) = outbox_status(&pool, row.id).await;
+    assert_eq!(status, "done");
+
+    delete_namespace(&namespace).await;
+    common::delete_outbox_row(&pool, row.id).await;
+}

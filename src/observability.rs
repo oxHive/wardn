@@ -108,6 +108,34 @@ pub async fn check_sqld_up(client: &reqwest::Client, sqld_url: &str) -> bool {
     client.get(sqld_url).send().await.is_ok()
 }
 
+/// Increments `gateway_provisioning_attempts_total{outcome}` — called from
+/// `attempt_provisioning` (`src/provisioning.rs`) with `"success"` or
+/// `"failure"`.
+pub fn record_provisioning_outcome(outcome: &'static str) {
+    metrics::counter!("gateway_provisioning_attempts_total", "outcome" => outcome).increment(1);
+}
+
+/// Sets `gateway_provisioning_outbox_pending`/`_failed` from a fresh count of
+/// `namespace_provisioning_outbox`. Called once per `run_worker` tick
+/// (`src/provisioning.rs`) — a full `COUNT(*)`, not `fetch_pending`'s
+/// batch-limited row count, so the gauge reflects the true queue depth even
+/// when it exceeds one tick's batch size.
+pub async fn refresh_provisioning_outbox_gauges(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let (pending,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM namespace_provisioning_outbox WHERE status = 'pending'",
+    )
+    .fetch_one(pool)
+    .await?;
+    let (failed,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM namespace_provisioning_outbox WHERE status = 'failed'",
+    )
+    .fetch_one(pool)
+    .await?;
+    metrics::gauge!("gateway_provisioning_outbox_pending").set(pending as f64);
+    metrics::gauge!("gateway_provisioning_outbox_failed").set(failed as f64);
+    Ok(())
+}
+
 /// Runs forever, probing `sqld_url` on `interval` and publishing the result
 /// to the `gateway_sqld_up` gauge (`1.0` up, `0.0` down). Spawned once, in
 /// production only, alongside the provisioning worker — see `main.rs`. Its

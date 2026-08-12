@@ -1,5 +1,5 @@
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -106,6 +106,7 @@ pub async fn attempt_provisioning(
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
+            crate::observability::record_provisioning_outcome("success");
             Ok(true)
         }
         Ok(resp) => {
@@ -115,10 +116,12 @@ pub async fn attempt_provisioning(
                 &format!("sqld admin API returned {}", resp.status()),
             )
             .await?;
+            crate::observability::record_provisioning_outcome("failure");
             Ok(false)
         }
         Err(e) => {
             record_failure(pool, row, &format!("sqld admin API request failed: {e}")).await?;
+            crate::observability::record_provisioning_outcome("failure");
             Ok(false)
         }
     }
@@ -190,6 +193,7 @@ pub async fn run_worker(pool: PgPool, sqld_admin_url: String, interval: Duration
     let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
+        let tick_start = Instant::now();
         let rows = match fetch_pending(&pool, WORKER_BATCH_SIZE).await {
             Ok(rows) => rows,
             Err(e) => {
@@ -202,5 +206,10 @@ pub async fn run_worker(pool: PgPool, sqld_admin_url: String, interval: Duration
                 tracing::error!("background provisioning attempt failed: {e:#}");
             }
         }
+        if let Err(e) = crate::observability::refresh_provisioning_outbox_gauges(&pool).await {
+            tracing::error!("failed to refresh provisioning outbox gauges: {e:#}");
+        }
+        metrics::histogram!("gateway_provisioning_worker_run_duration_seconds")
+            .record(tick_start.elapsed().as_secs_f64());
     }
 }
