@@ -20,7 +20,14 @@
 //! would ride the connection back into the pool still held and wedge every
 //! test that came after it.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use sqlx::{PgPool, Postgres, Transaction};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 
 /// Arbitrary fixed key ("HIVEMIND" in ASCII), shared by every test binary in
 /// this crate — it only works as mutual exclusion if all of them use the same
@@ -60,4 +67,78 @@ pub async fn delete_outbox_row(pool: &PgPool, id: uuid::Uuid) {
         .execute(pool)
         .await
         .expect("delete outbox row");
+}
+
+/// Captures every `tracing` event with `target: "usage"` emitted while a
+/// closure runs, as a list of field-name → stringified-value maps — used to
+/// assert on `proxy_handler`'s usage-event fields (`src/proxy.rs`) directly,
+/// rather than parsing formatted log output.
+#[derive(Clone, Default)]
+struct UsageEventCapture {
+    events: Arc<Mutex<Vec<HashMap<String, String>>>>,
+}
+
+impl UsageEventCapture {
+    fn events(&self) -> Vec<HashMap<String, String>> {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+struct FieldVisitor(HashMap<String, String>);
+
+impl Visit for FieldVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+impl<S> Layer<S> for UsageEventCapture
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        if event.metadata().target() != "usage" {
+            return;
+        }
+        let mut visitor = FieldVisitor(HashMap::new());
+        event.record(&mut visitor);
+        self.events.lock().unwrap().push(visitor.0);
+    }
+}
+
+/// Runs `f` with a tracing subscriber that captures `target: "usage"`
+/// events, returning both `f`'s result and whatever events fired while it
+/// ran. Uses `tracing::subscriber::set_default` and holds the returned
+/// guard across the `.await` — this only works because `#[tokio::test]`
+/// defaults to a single-threaded runtime (every test file in this crate
+/// uses the bare attribute, no `flavor = "multi_thread"`), so the task
+/// never moves to a different OS thread mid-poll and the thread-local
+/// dispatcher stays in effect for the whole call, including inside any
+/// `tokio::spawn`ed task also polled on that same thread.
+pub async fn capture_usage_events<F, Fut, T>(f: F) -> (T, Vec<HashMap<String, String>>)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let capture = UsageEventCapture::default();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let result = f().await;
+    (result, capture.events())
 }

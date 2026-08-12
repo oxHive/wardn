@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Extension;
 use axum::body::Body;
@@ -174,10 +174,13 @@ pub async fn proxy_handler(
     Extension(owner): Extension<AuthedOwner>,
     request: Request,
 ) -> Response {
+    let start = Instant::now();
     let (parts, body) = request.into_parts();
 
+    let mut org_id_for_usage: Option<Uuid> = None;
     let namespace = match org_id_header(&parts.headers) {
         Some(Ok(org_id)) => {
+            org_id_for_usage = Some(org_id);
             // Mirrors the HTTP/2-in-means-h2c-out fork `ProxyClient::for_version`
             // makes below: db:sync gates the gRPC replication leg, db:query
             // gates everything else (Hrana/HTTP1.1).
@@ -324,6 +327,31 @@ pub async fn proxy_handler(
     let response_headers = forwardable_headers(
         &upstream_parts.headers,
         &[header::CONTENT_LENGTH, header::TRANSFER_ENCODING],
+    );
+
+    // One usage event per request that actually reached sqld — see
+    // docs/superpowers/specs/2026-08-12-usage-metering-design.md. Emitted
+    // here, not earlier: every early `return` above is a request that never
+    // consumed database resources (auth/permission/namespace-resolution
+    // rejections, malformed headers), and isn't a billable event.
+    let protocol = if outbound_version == Version::HTTP_2 {
+        "sync"
+    } else {
+        "query"
+    };
+    let org_id_field = org_id_for_usage
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    tracing::info!(
+        target: "usage",
+        owner_type = %owner.owner_type,
+        owner_id = %owner.owner_id,
+        org_id = %org_id_field,
+        namespace = %namespace,
+        protocol,
+        status = upstream_parts.status.as_u16() as u64,
+        duration_ms = start.elapsed().as_millis() as u64,
+        "usage event"
     );
 
     // `Body::new` keeps the upstream body as a stream *and* passes its trailer
