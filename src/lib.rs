@@ -2,6 +2,7 @@ pub mod api_keys;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod observability;
 pub mod org;
 pub mod provisioning;
 pub mod proxy;
@@ -54,6 +55,7 @@ pub fn app(state: AppState) -> Router {
             auth::auth_middleware,
         ))
         .route("/healthz", get(healthz))
+        .route("/metrics", get(observability::metrics_handler))
         .route("/users", post(registration::create_user))
         .with_state(state)
 }

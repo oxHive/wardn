@@ -27,8 +27,10 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 
+use metrics_exporter_prometheus::PrometheusHandle;
 use sqlx::{PgPool, Postgres, Transaction};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
@@ -147,4 +149,20 @@ where
     let _guard = tracing::subscriber::set_default(subscriber);
     let result = f().await;
     (result, capture.events())
+}
+
+static METRICS_HANDLE: LazyLock<PrometheusHandle> = LazyLock::new(|| {
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install prometheus recorder for tests")
+});
+
+/// Installs (once per test binary, via `LazyLock`) the global Prometheus
+/// recorder and returns its handle. Every test in a binary that asserts on
+/// metric output must go through this: `metrics::counter!`/`gauge!`/
+/// `histogram!` calls anywhere in the crate route to whichever recorder is
+/// globally installed for the process, and a second `install_recorder()`
+/// call in the same process panics — so this is the one place that calls it.
+pub fn metrics_handle() -> PrometheusHandle {
+    METRICS_HANDLE.clone()
 }

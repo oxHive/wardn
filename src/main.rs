@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use hivemind_gateway::{AppState, app, config::Config, db, provisioning};
+use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::EnvFilter;
 
 /// How often the background provisioning worker retries pending outbox
@@ -22,6 +23,10 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let pool = db::connect(&config.database_url).await?;
 
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("install prometheus recorder");
+
     let worker_pool = pool.clone();
     let worker_admin_url = config.sqld_admin_url.clone();
     tokio::spawn(provisioning::run_worker(
@@ -31,7 +36,8 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let state = AppState::new(pool, config.sqld_url.clone())
-        .with_sqld_admin_url(config.sqld_admin_url.clone());
+        .with_sqld_admin_url(config.sqld_admin_url.clone())
+        .with_metrics_handle(metrics_handle);
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("hivemind-gateway listening on {}", config.listen_addr);
     axum::serve(listener, app(state)).await?;

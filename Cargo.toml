@@ -34,6 +34,8 @@ serde = { version = "1", features = ["derive"] }
 # protocol-accurate HTTP/1.1-vs-h2c forwarding, which reqwest doesn't give
 # fine-grained enough control over.
 reqwest = { version = "0.12", features = ["stream"] }
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
 
 [dev-dependencies]
 bytes = "1"

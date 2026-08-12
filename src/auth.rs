@@ -4,6 +4,7 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use rand::Rng;
 use sqlx::PgPool;
 use std::sync::LazyLock;
@@ -28,20 +29,35 @@ pub struct AppState {
     pub sqld_admin_url: String,
     /// Pooled outbound HTTP clients, shared by every request.
     pub client: ProxyClient,
+    /// Renders `GET /metrics` (`src/observability.rs`). `new` builds a local,
+    /// non-globally-installed handle so every existing call site keeps
+    /// compiling unchanged; `main.rs` overrides it via `with_metrics_handle`
+    /// with the handle tied to the globally installed recorder — the one the
+    /// `metrics::counter!`/`gauge!`/`histogram!` calls elsewhere in this
+    /// crate actually feed. A handle not tied to the global recorder still
+    /// renders successfully, just always as empty output.
+    pub metrics_handle: PrometheusHandle,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, sqld_url: String) -> Self {
+        let metrics_handle = PrometheusBuilder::new().build_recorder().handle();
         Self {
             pool,
             sqld_url,
             sqld_admin_url: String::new(),
             client: ProxyClient::new(),
+            metrics_handle,
         }
     }
 
     pub fn with_sqld_admin_url(mut self, sqld_admin_url: String) -> Self {
         self.sqld_admin_url = sqld_admin_url;
+        self
+    }
+
+    pub fn with_metrics_handle(mut self, metrics_handle: PrometheusHandle) -> Self {
+        self.metrics_handle = metrics_handle;
         self
     }
 }
