@@ -554,7 +554,7 @@ pub mod routing;
 pub use auth::AppState;
 use axum::{
     Router,
-    routing::{any, delete, get, patch, post, put},
+    routing::{any, get, patch, post, put},
 };
 
 async fn healthz() -> &'static str {
@@ -909,7 +909,7 @@ pub mod routing;
 pub use auth::AppState;
 use axum::{
     Router,
-    routing::{any, delete, get, patch, post, put},
+    routing::{any, get, patch, post, put},
 };
 
 async fn healthz() -> &'static str {
@@ -1313,7 +1313,7 @@ pub mod routing;
 pub use auth::AppState;
 use axum::{
     Router,
-    routing::{any, delete, get, patch, post, put},
+    routing::{any, get, patch, post, put},
 };
 
 async fn healthz() -> &'static str {
