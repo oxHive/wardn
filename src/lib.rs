@@ -4,6 +4,7 @@ pub mod db;
 pub mod org_admin;
 pub mod provisioning;
 pub mod proxy;
+pub mod registration;
 pub mod roles;
 pub mod routing;
 
@@ -38,5 +39,6 @@ pub fn app(state: AppState) -> Router {
             auth::auth_middleware,
         ))
         .route("/healthz", get(healthz))
+        .route("/users", post(registration::create_user))
         .with_state(state)
 }
