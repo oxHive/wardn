@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -121,4 +123,31 @@ pub async fn fetch_pending(pool: &PgPool, limit: i64) -> Result<Vec<OutboxRow>, 
     .bind(limit)
     .fetch_all(pool)
     .await
+}
+
+/// How many rows the background worker attempts per tick.
+const WORKER_BATCH_SIZE: i64 = 20;
+
+/// Runs forever, retrying pending provisioning rows on a fixed interval.
+/// Spawned once, in-process, alongside `axum::serve` (see `main.rs`) — no
+/// external cron or separate worker binary. `interval` is a parameter
+/// (rather than a hardcoded const) so tests can drive it on a much shorter
+/// cycle than production's.
+pub async fn run_worker(pool: PgPool, sqld_admin_url: String, interval: Duration) {
+    let mut ticker = tokio::time::interval(interval);
+    loop {
+        ticker.tick().await;
+        let rows = match fetch_pending(&pool, WORKER_BATCH_SIZE).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!("failed to fetch pending provisioning rows: {e:#}");
+                continue;
+            }
+        };
+        for row in rows {
+            if let Err(e) = attempt_provisioning(&pool, &sqld_admin_url, &row).await {
+                tracing::error!("background provisioning attempt failed: {e:#}");
+            }
+        }
+    }
 }

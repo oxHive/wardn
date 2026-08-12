@@ -140,3 +140,39 @@ async fn fetch_pending_returns_only_pending_rows() {
     assert!(pending.iter().any(|r| r.id == row_b.id));
     assert!(!pending.iter().any(|r| r.id == row_a.id));
 }
+
+use std::time::Duration;
+
+#[tokio::test]
+async fn run_worker_eventually_provisions_a_row_the_inline_attempt_missed() {
+    let pool = test_pool().await;
+    let namespace = format!("workerrecover-{}", Uuid::new_v4());
+    // Seed as if an inline attempt already failed once: pending, attempts=1.
+    let row = seed_outbox_row(&pool, "user", &namespace).await;
+    sqlx::query("UPDATE namespace_provisioning_outbox SET attempts = 1 WHERE id = $1")
+        .bind(row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    tokio::spawn(provisioning::run_worker(
+        pool.clone(),
+        admin_url(),
+        Duration::from_millis(100),
+    ));
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (status, _attempts) = outbox_status(&pool, row.id).await;
+    assert_eq!(status, "done");
+    let mapping: Option<(String,)> = sqlx::query_as(
+        "SELECT sqld_namespace FROM database_mappings WHERE owner_type = 'user' AND owner_id = $1",
+    )
+    .bind(row.owner_id)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(mapping.unwrap().0, namespace);
+
+    delete_namespace(&namespace).await;
+}
