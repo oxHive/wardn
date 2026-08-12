@@ -35,7 +35,32 @@ services:
       SQLD_URL: http://sqld:8080
       SQLD_ADMIN_URL: http://sqld:8090
       LISTEN_ADDR: 0.0.0.0:8787
+      METRICS_TOKEN: dev-metrics-token
     # The gateway is the one service meant to be reachable — still loopback
     # only here since this compose file is for local dev, not production.
     ports:
       - "127.0.0.1:8787:8787"
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+    # Local-dev-only, unauthenticated by default — loopback only, matching
+    # every other service in this file.
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - gateway
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,Z
+    environment:
+      # Local dev only: anonymous viewer access so `podman-compose up` gives
+      # a ready-to-browse Grafana with no login step. Loopback only, same
+      # posture as postgres/sqld above.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus

@@ -186,6 +186,23 @@ to `info` when unset. Usage-metering events are ordinary log lines carrying
 stream; they share the level floor with every other log, so raising it above
 `info` also stops metering.
 
+### Observability
+
+`GET /metrics` exposes Prometheus-format metrics: proxy request counts and
+latency (by protocol/status/namespace), Postgres pool size, sqld
+reachability, and the provisioning worker's outbox queue depth. Requires
+`Authorization: Bearer <METRICS_TOKEN>` — added because the per-tenant
+`namespace` label would otherwise let anyone reachable enumerate every
+tenant's UUID and traffic volume through an unauthenticated endpoint. Set
+`METRICS_TOKEN` to any secret string; the dev compose stack below uses
+`dev-metrics-token`.
+
+`podman-compose up` also brings up Prometheus (`127.0.0.1:9090`, scraping
+the gateway every 15s with that token) and Grafana (`127.0.0.1:3000`,
+anonymous viewer access, Prometheus pre-wired as its datasource) for local
+testing. No dashboards ship by default — add your own in Grafana's UI, or
+build them against the metric names above.
+
 ## Project layout
 
 | Path | Responsibility |
