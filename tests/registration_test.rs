@@ -182,7 +182,10 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
                 .uri("/orgs")
                 .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"name":"Acme"}"#))
+                .body(Body::from(format!(
+                    r#"{{"name":"Acme-{}"}}"#,
+                    uuid::Uuid::new_v4()
+                )))
                 .unwrap(),
         )
         .await
@@ -289,7 +292,10 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
                 .uri("/orgs")
                 .header(header::AUTHORIZATION, format!("Bearer {full_key}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"name":"Nope"}"#))
+                .body(Body::from(format!(
+                    r#"{{"name":"Nope-{}"}}"#,
+                    uuid::Uuid::new_v4()
+                )))
                 .unwrap(),
         )
         .await
