@@ -81,6 +81,50 @@ async fn metrics_endpoint_requires_valid_bearer_token() {
     assert!(content_type.to_str().unwrap().starts_with("text/plain"));
 }
 
+// Pins the fail-closed default itself: builds an `AppState` via `AppState::new`
+// alone, without `.with_metrics_token(...)`, so `metrics_token` is left at its
+// empty-string default. Every other test in this file calls
+// `.with_metrics_token(...)`, so none of them actually prove that the default
+// rejects requests — including the specific bypass risk that `Authorization:
+// Bearer ` (trailing space, empty credential) parses to `Some("")`, which
+// would compare equal to an empty `state.metrics_token` if the `is_empty()`
+// guard in `metrics_handler` were ever accidentally removed. Without this
+// test, deleting that guard would leave every other test in this file green.
+#[tokio::test]
+async fn metrics_endpoint_rejects_when_token_unset() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool, test_sqld_url()).with_sqld_admin_url(admin_url());
+    let app = hivemind_gateway::app(state);
+
+    // No Authorization header at all.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // `Authorization: Bearer ` — trailing space, empty credential after
+    // stripping the "Bearer " prefix. This parses to `Some("")`, which must
+    // still be rejected even though `state.metrics_token` is also `""`.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header(header::AUTHORIZATION, "Bearer ")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 async fn register(app: axum::Router, email: &str) -> (Uuid, String) {
     let resp = app
         .oneshot(

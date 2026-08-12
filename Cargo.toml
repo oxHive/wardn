@@ -35,7 +35,7 @@ serde = { version = "1", features = ["derive"] }
 # fine-grained enough control over.
 reqwest = { version = "0.12", features = ["stream"] }
 metrics = "0.24.6"
-metrics-exporter-prometheus = "0.18.3"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 
 [dev-dependencies]
 bytes = "1"

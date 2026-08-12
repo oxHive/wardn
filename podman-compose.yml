@@ -43,6 +43,8 @@ services:
   prometheus:
     image: docker.io/prom/prometheus:latest
     volumes:
+      # `Z` relabels the mount for rootless-podman + SELinux-enforcing hosts;
+      # harmless no-op elsewhere.
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
     # Local-dev-only, unauthenticated by default — loopback only, matching
     # every other service in this file.
@@ -53,6 +55,8 @@ services:
   grafana:
     image: docker.io/grafana/grafana:latest
     volumes:
+      # `Z` relabels the mount for rootless-podman + SELinux-enforcing hosts;
+      # harmless no-op elsewhere.
       - ./grafana/provisioning:/etc/grafana/provisioning:ro,Z
     environment:
       # Local dev only: anonymous viewer access so `podman-compose up` gives

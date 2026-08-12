@@ -14,13 +14,13 @@ Pre-launch hardening. No specific incident is driving this — it's the last ope
 
 - **Prometheus `/metrics` endpoint**, not spans or a push-based system. Standard pull-based counters/histograms/gauges via the `metrics` facade crate + `metrics-exporter-prometheus`. Works with Grafana/Prometheus/most cloud monitors out of the box; no new infra dependency beyond a scrape target. Distributed tracing spans remain out of scope, same as usage metering's design explicitly deferred them.
 - **Full coverage: request-level, dependency health, and the provisioning worker.** Not just proxy traffic — also Postgres pool state, sqld reachability, and `namespace_provisioning_outbox` queue depth. The goal is "is the problem us, a dependency, or a stuck background job" answerable from one endpoint.
-- **`GET /metrics` requires a static bearer token (`METRICS_TOKEN`)**, checked before rendering, superseding this slice's original brainstorming choice of "unauthenticated, Prometheus convention." Reversed during Task 2's review: the `namespace` label (see below) makes an unauthenticated `/metrics` a tenant-enumeration endpoint — any caller can list every tenant UUID, request volume, and latency profile, and anonymous `POST /users` can grow that per-tenant label set without bound. A shared-secret token is a small addition (one new `Config` field, one header check) and closes both the enumeration read and the growth-vector concern without giving up the `namespace` label's per-tenant breakdown. Distinct from the API-key system — this is a single deployment-wide secret, not a per-caller credential.
+- **`GET /metrics` requires a static bearer token (`METRICS_TOKEN`)**, checked before rendering, superseding this slice's original brainstorming choice of "unauthenticated, Prometheus convention." Reversed during Task 2's review: the `namespace` label (see below) makes an unauthenticated `/metrics` a tenant-enumeration endpoint — any caller can list every tenant UUID, request volume, and latency profile, and anonymous `POST /users` can grow that per-tenant label set without bound. A shared-secret token is a small addition (one new `Config` field, one header check) and closes the enumeration-read path. It does **not** address the growth-vector concern — an unauthenticated caller can still repeatedly `POST /users` to grow the recorder's distinct-`namespace` label set, since the token only gates *reading* `/metrics`, not writing metrics — that risk remains separately tracked below ("No cap on distinct namespace values in this slice"). Distinct from the API-key system — this is a single deployment-wide secret, not a per-caller credential.
 - **`namespace` is a label on proxy request metrics**, despite unbounded cardinality risk as tenant count grows. Chosen over the cardinality-safe alternative (protocol/status-class only) because per-tenant breakdown at a glance is worth more than the safety margin right now. **No cap on distinct namespace values in this slice** — accepted risk, consistent with this project's existing pattern of documenting known-but-not-yet-urgent risks (e.g. no rate limiting yet either) rather than over-engineering a mitigation before it's needed. Revisit if/when tenant count grows or rate limiting ships, whichever comes first.
 
 **Explicitly out of scope for this slice:**
 - Distributed tracing spans (deferred by usage metering's own design; nothing here changes that).
 - Alerting rules or Grafana dashboards themselves — this slice makes the data available; building specific dashboards/alerts is whoever operates the deployed service's job, same as usage metering left pipeline consumption out of scope.
-- `/metrics` authentication (accepted risk, see above).
+- Per-caller `/metrics` authentication — a single shared `METRICS_TOKEN` is in scope and implemented (see Scope decisions above); separately revocable, per-scraper credentials are not.
 - Namespace-label cardinality capping (accepted risk, see above).
 - Byte/bandwidth metrics — same reasoning usage metering used to exclude byte counting (would require wrapping the streaming body in `proxy.rs`).
 
@@ -32,7 +32,7 @@ Pre-launch hardening. No specific incident is driving this — it's the last ope
 
 ### `GET /metrics`
 
-Registered alongside `/healthz` in `src/lib.rs`'s `app()`, outside the `auth_middleware` layer. Handler renders `AppState`'s `PrometheusHandle` to the standard Prometheus text exposition format. Before rendering, it also refreshes the two Postgres pool gauges (see below) from `PgPool::size()`/`num_idle()` — cheap, synchronous, no extra query, so doing it at scrape time rather than on a timer adds no meaningful cost.
+Registered alongside `/healthz` in `src/lib.rs`'s `app()`, outside the `auth_middleware` layer. Because it sits outside that layer, the handler validates its own `Authorization: Bearer <METRICS_TOKEN>` header before doing anything else — fail-closed if `METRICS_TOKEN` is unset (an empty `state.metrics_token`, `AppState::new`'s default, rejects every request). Only once that check passes does it render `AppState`'s `PrometheusHandle` to the standard Prometheus text exposition format. Before rendering, it also refreshes the two Postgres pool gauges (see below) from `PgPool::size()`/`num_idle()` — cheap, synchronous, no extra query, so doing it at scrape time rather than on a timer adds no meaningful cost.
 
 ### Metric catalog
 
@@ -59,7 +59,7 @@ Two new services, both loopback-bound like every existing service in this file:
 prometheus:
   image: docker.io/prom/prometheus:latest
   volumes:
-    - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
   ports:
     - "127.0.0.1:9090:9090"
   depends_on:
@@ -68,7 +68,7 @@ prometheus:
 grafana:
   image: docker.io/grafana/grafana:latest
   volumes:
-    - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    - ./grafana/provisioning:/etc/grafana/provisioning:ro,Z
   environment:
     GF_AUTH_ANONYMOUS_ENABLED: "true"
     GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer

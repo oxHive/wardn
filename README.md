@@ -13,10 +13,10 @@ full design and the boundary this is built to respect.
 
 **Status:** walking skeleton, plus org role enforcement, self-service
 database provisioning (`POST /users` and `POST /orgs` now create their own
-sqld namespaces — no more hand-seeding), org membership management, and
-self-service API keys. Billing, rate limiting, a general
-admin API, and observability/alerting don't exist yet — see the memory entries
-tagged `project:hivemind-gateway` for the current state and plan, or
+sqld namespaces — no more hand-seeding), org membership management,
+self-service API keys, and observability (see below). Billing, rate
+limiting, a general admin API, and alerting don't exist yet — see the memory
+entries tagged `project:hivemind-gateway` for the current state and plan, or
 `docs/superpowers/plans/2026-08-11-walking-skeleton.md` for how this was built.
 
 ## Quickstart

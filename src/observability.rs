@@ -18,7 +18,9 @@ use crate::auth::AppState;
 /// would otherwise let anyone enumerate every tenant's UUID and traffic
 /// volume through this endpoint. `state.metrics_token` empty (the default
 /// from `AppState::new`) fails closed — every request is rejected until
-/// `main.rs` sets a real token via `with_metrics_token`.
+/// `main.rs` sets a real token via `with_metrics_token`. On an authorized
+/// call, it also refreshes the Postgres pool gauges (`refresh_pg_pool_gauges`)
+/// as a side effect before rendering.
 pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let token = headers
         .get(header::AUTHORIZATION)
@@ -77,7 +79,11 @@ impl Default for InFlightGuard {
 /// Called only from the same two points in `proxy_handler` that already emit
 /// a usage event (`src/proxy.rs`) — a request rejected before reaching sqld
 /// never calls this, matching `gateway_proxy_requests_total`'s definition as
-/// proxy traffic that actually reached sqld.
+/// proxy traffic that actually reached sqld. `duration` measures request
+/// entry to response *head*, not full transfer — on the `sync` path, where
+/// the streaming gRPC body is the long-lived part, it says very little about
+/// how long the request really took (same caveat `src/proxy.rs` documents
+/// for its usage-event `duration_ms`).
 pub fn record_proxy_metrics(
     protocol: &'static str,
     namespace: &str,
