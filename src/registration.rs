@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AppState, AuthedOwner};
-use crate::org_admin::is_unique_violation;
+use crate::org::admin::is_unique_violation;
 use crate::provisioning::{self, OutboxRow};
 use crate::roles;
 

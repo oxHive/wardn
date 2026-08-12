@@ -1,7 +1,7 @@
 pub mod auth;
 pub mod config;
 pub mod db;
-pub mod org_admin;
+pub mod org;
 pub mod provisioning;
 pub mod proxy;
 pub mod registration;
@@ -23,15 +23,15 @@ pub fn app(state: AppState) -> Router {
         .route("/orgs", post(registration::create_org))
         .route(
             "/orgs/{org_id}/roles",
-            post(org_admin::create_role).get(org_admin::list_roles),
+            post(org::admin::create_role).get(org::admin::list_roles),
         )
         .route(
             "/orgs/{org_id}/roles/{role_id}",
-            patch(org_admin::update_role).delete(org_admin::delete_role),
+            patch(org::admin::update_role).delete(org::admin::delete_role),
         )
         .route(
             "/orgs/{org_id}/members/{user_id}/role",
-            put(org_admin::assign_member_role),
+            put(org::admin::assign_member_role),
         )
         .route("/{*path}", any(proxy::proxy_handler))
         .route("/", any(proxy::proxy_handler))
