@@ -54,8 +54,8 @@ Fix the Critical and all ten Important findings from a full-codebase security/qu
 **Problem:** No rate limit anywhere in the gateway. `POST /users` is public and each call provisions a real sqld namespace (disk) plus an argon2/HMAC hash (CPU) plus an org quota of zero (unlimited orgs per user, since `create_org` has no cap).
 
 **Fix:**
-- A per-source-IP rate limit on `POST /users` and `POST /orgs`, via `tower_governor` (the standard `tower`-ecosystem choice for this — new dependency). Limit: 5 requests/hour/IP on `/users`, matching the audit's suggestion; same on `/orgs`.
-- A cap on orgs created per user — a straightforward `COUNT(*)` check against `org_members` (owner role) before `create_org` proceeds, returning 429 or 403 once a small fixed ceiling is hit (implementer picks a reasonable default, e.g. 10, since this project has no plan/billing tiers yet to derive the number from).
+- A per-source-IP rate limit on `POST /users`, via `tower_governor` (the standard `tower`-ecosystem choice for this — new dependency). Limit: 5 requests/hour/IP, matching the audit's suggestion. **Not applied to `POST /orgs`**: that endpoint is authenticated, so a per-user quota (below) is the more precise defense — an IP-based limit would also throttle legitimate customers sharing a NAT/office IP, which the quota doesn't, since it keys on identity rather than network address.
+- A cap on orgs created per user — a straightforward `COUNT(*)` check against `org_members` (owner role) before `create_org` proceeds, returning 429 once a small fixed ceiling is hit (implementer picks a reasonable default, e.g. 10, since this project has no plan/billing tiers yet to derive the number from). This is `/orgs`'s only rate-limiting defense — see above.
 - Global concurrency isn't capped by this task — that's a broader "add a load-shedding layer to the whole gateway" concern the audit didn't scope tightly enough to fix here without guessing at a number; left as a future consideration.
 
 ### 5. Metrics cardinality: drop `namespace` label from proxy metrics (Important)
