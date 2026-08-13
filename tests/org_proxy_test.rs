@@ -585,3 +585,44 @@ async fn member_without_db_sync_is_forbidden_over_h2c() {
 
     delete_namespace(&namespace).await;
 }
+
+/// The permission gate must key off the actual protocol being spoken (the
+/// request path), not the client's chosen HTTP version. Before this fix, a
+/// `db:sync`-only member could run arbitrary Hrana SQL by simply sending it
+/// over an h2c connection instead of HTTP/1.1 — the gate saw HTTP/2 and asked
+/// for `db:sync`, which they legitimately hold, granting full read/write SQL
+/// they were never given `db:query` for.
+#[tokio::test]
+async fn member_with_only_db_sync_cannot_run_hrana_queries_over_h2c() {
+    let pool = test_pool().await;
+    let namespace = format!("orgescalate-{}", Uuid::new_v4());
+    create_namespace(&namespace).await;
+    let (org_id, key) = seed_org_member(&pool, &namespace, &[Permission::DbSync]).await;
+    let gateway = spawn_gateway(pool).await;
+
+    let mut builder = HyperClient::builder(TokioExecutor::new());
+    builder.http2_only(true);
+    let client: HyperClient<HttpConnector, Full<Bytes>> = builder.build(HttpConnector::new());
+    let request = hyper::Request::builder()
+        .method("POST")
+        .uri(format!("{gateway}/"))
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-org-id", org_id.to_string())
+        .body(Full::new(Bytes::from_static(
+            br#"{"statements":["SELECT 1"]}"#,
+        )))
+        .unwrap();
+    let status = client
+        .request(request)
+        .await
+        .expect("request failed")
+        .status();
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "db:sync-only member ran a Hrana query over h2c — permission escalation"
+    );
+
+    delete_namespace(&namespace).await;
+}

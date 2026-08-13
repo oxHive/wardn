@@ -44,6 +44,22 @@ const X_NAMESPACE_BIN: HeaderName = HeaderName::from_static("x-namespace-bin");
 /// selector, sqld has no notion of it.
 const X_ORG_ID: HeaderName = HeaderName::from_static("x-org-id");
 
+/// Path prefixes sqld's gRPC services live under. Only `/wal_log.` is
+/// verified against real traffic this gateway proxies today (hivemind's
+/// embedded-replica sync speaks `/wal_log.ReplicationLog/*`) — if another
+/// sqld gRPC service (e.g. its `Proxy` write-forwarding service) is ever
+/// proxied through here, its prefix belongs in this list too. Used to
+/// classify a request's *actual* protocol for the permission gate below,
+/// rather than trusting the client's chosen HTTP version — a Hrana/SQL
+/// request can legally arrive over HTTP/2 as well as HTTP/1.1, so the
+/// version alone doesn't distinguish "this is a gRPC replication call" from
+/// "this is a SQL query that happens to use h2c."
+const GRPC_PATH_PREFIXES: [&str; 1] = ["/wal_log."];
+
+fn is_grpc_path(path: &str) -> bool {
+    GRPC_PATH_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
 /// RFC 9110 §7.6.1 connection-specific ("hop-by-hop") header fields. A proxy
 /// must not forward these in either direction: they describe the single
 /// connection they arrived on, not the message. Forwarding them also breaks
@@ -182,19 +198,29 @@ pub async fn proxy_handler(
     let namespace = match org_id_header(&parts.headers) {
         Some(Ok(org_id)) => {
             org_id_for_usage = Some(org_id);
-            // Mirrors the HTTP/2-in-means-h2c-out fork `ProxyClient::for_version`
-            // makes below: db:sync gates the gRPC replication leg, db:query
-            // gates everything else (Hrana/HTTP1.1).
+            // Gates on the request's actual path, not the client's chosen
+            // HTTP version — a Hrana/SQL request is legal over both HTTP/1.1
+            // and HTTP/2, so the version alone previously let a db:sync-only
+            // caller run full SQL by sending it over h2c. `db:sync` gates
+            // sqld's gRPC replication paths; `db:query` gates everything
+            // else (Hrana/HTTP), regardless of transport.
             //
-            // `require_permission` takes the whole `AuthedOwner` and rejects a
-            // non-`user` owner_type itself — a workspace/org-owned key's
+            // `require_permission` takes the whole `AuthedOwner` and rejects
+            // a non-`user` owner_type itself — a workspace/org-owned key's
             // owner_id names a workspace/org, not a user, and must never be
             // looked up as an `org_members.user_id`.
-            let required = if parts.version == Version::HTTP_2 {
+            let path = parts.uri.path();
+            let required = if is_grpc_path(path) {
                 Permission::DbSync
             } else {
                 Permission::DbQuery
             };
+            // A gRPC path can only be legitimately served over HTTP/2 —
+            // reject the HTTP/1.1 combination outright rather than
+            // forwarding it and depending on sqld to reject it.
+            if is_grpc_path(path) && parts.version != Version::HTTP_2 {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
             if let Err(status) =
                 roles::require_permission(&state.pool, org_id, &owner, required).await
             {
