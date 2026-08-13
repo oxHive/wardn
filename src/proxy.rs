@@ -56,8 +56,25 @@ const X_ORG_ID: HeaderName = HeaderName::from_static("x-org-id");
 /// "this is a SQL query that happens to use h2c."
 const GRPC_PATH_PREFIXES: [&str; 1] = ["/wal_log."];
 
+/// Classifies a request's protocol from its raw, undecoded path — see
+/// [`has_suspicious_path_encoding`] for why matching on that raw string is
+/// safe only as long as it stays identical to what gets forwarded to sqld.
 fn is_grpc_path(path: &str) -> bool {
     GRPC_PATH_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
+/// `true` if `path` contains a `.`/`..` path segment or a `%` (the start of
+/// percent-encoding). `is_grpc_path` and the request forwarded to sqld below
+/// both classify and route on the *identical* raw `path` string from the
+/// incoming request — that's only sound because axum's router (`matchit`)
+/// does not normalize dot-segments or percent-decode before matching, so
+/// what `is_grpc_path` sees here is exactly what sqld receives. That's a
+/// property of an upstream we don't control, not a guarantee this file
+/// should rest on — this check fails closed instead. If `proxy_handler` ever
+/// normalizes or decodes `path` before this point, this assumption (and this
+/// check) need to be re-examined.
+fn has_suspicious_path_encoding(path: &str) -> bool {
+    path.contains('%') || path.split('/').any(|segment| segment == "." || segment == "..")
 }
 
 /// RFC 9110 §7.6.1 connection-specific ("hop-by-hop") header fields. A proxy
@@ -210,17 +227,28 @@ pub async fn proxy_handler(
             // owner_id names a workspace/org, not a user, and must never be
             // looked up as an `org_members.user_id`.
             let path = parts.uri.path();
-            let required = if is_grpc_path(path) {
+            // Fail closed on a path we can't confidently classify — see
+            // `has_suspicious_path_encoding`'s doc comment for why a `.`,
+            // `..`, or `%` segment here is refused outright rather than
+            // classified and forwarded as-is.
+            if has_suspicious_path_encoding(path) {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            let grpc = is_grpc_path(path);
+            // A gRPC path can only be legitimately served over HTTP/2 —
+            // reject the HTTP/1.1 combination outright rather than
+            // forwarding it and depending on sqld to reject it. This must
+            // precede the permission computation below: which permission is
+            // required depends on `grpc` being an accurate classification of
+            // this specific request, not just of the path in isolation.
+            if grpc && parts.version != Version::HTTP_2 {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            let required = if grpc {
                 Permission::DbSync
             } else {
                 Permission::DbQuery
             };
-            // A gRPC path can only be legitimately served over HTTP/2 —
-            // reject the HTTP/1.1 combination outright rather than
-            // forwarding it and depending on sqld to reject it.
-            if is_grpc_path(path) && parts.version != Version::HTTP_2 {
-                return StatusCode::BAD_REQUEST.into_response();
-            }
             if let Err(status) =
                 roles::require_permission(&state.pool, org_id, &owner, required).await
             {
@@ -512,5 +540,39 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode("probens");
         assert_eq!(encoded, "cHJvYmVucw");
         assert!(!encoded.contains('='));
+    }
+
+    /// A `..` segment must be caught before the path is trusted to classify
+    /// (and then forward) the request — `is_grpc_path`/sqld only agree on
+    /// this string's meaning as long as it stays unnormalized on both sides.
+    #[test]
+    fn dot_dot_segment_is_suspicious() {
+        assert!(has_suspicious_path_encoding("/wal_log./../admin"));
+    }
+
+    /// A single `.` segment is just as suspicious as `..` — both are
+    /// dot-segments RFC 3986 §3.3/§5.2.4 normalization would remove.
+    #[test]
+    fn single_dot_segment_is_suspicious() {
+        assert!(has_suspicious_path_encoding("/./wal_log.ReplicationLog/Hello"));
+    }
+
+    /// Percent-encoding (e.g. `%2e%2e` decoding to `..`) is refused outright
+    /// rather than decoded and re-checked — this gateway never percent-
+    /// decodes the path, so any `%` here is already an unclassifiable input.
+    #[test]
+    fn percent_encoded_path_is_suspicious() {
+        assert!(has_suspicious_path_encoding("/%2e%2e/wal_log.ReplicationLog/Hello"));
+    }
+
+    /// The real gRPC replication path this gateway actually proxies today
+    /// must pass through the check untouched — this is the case the whole
+    /// fix exists to keep working.
+    #[test]
+    fn real_grpc_path_is_not_suspicious() {
+        assert!(!has_suspicious_path_encoding(
+            "/wal_log.ReplicationLog/Hello"
+        ));
+        assert!(is_grpc_path("/wal_log.ReplicationLog/Hello"));
     }
 }
