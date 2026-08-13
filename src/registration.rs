@@ -179,9 +179,10 @@ async fn insert_org(
     let namespace = org_id.to_string();
 
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO orgs (id, name) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO orgs (id, name, created_by) VALUES ($1, $2, $3)")
         .bind(org_id)
         .bind(name)
+        .bind(creator_user_id)
         .execute(&mut *tx)
         .await?;
     sqlx::query("INSERT INTO roles (id, org_id, name) VALUES ($1, $2, 'owner')")
@@ -243,14 +244,11 @@ pub async fn create_org(
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let owned_org_count: Result<(i64,), sqlx::Error> = sqlx::query_as(
-        "SELECT COUNT(*) FROM org_members om
-         JOIN roles r ON r.id = om.role_id
-         WHERE om.user_id = $1 AND r.name = 'owner'",
-    )
-    .bind(owner.owner_id)
-    .fetch_one(&state.pool)
-    .await;
+    let owned_org_count: Result<(i64,), sqlx::Error> =
+        sqlx::query_as("SELECT COUNT(*) FROM orgs WHERE created_by = $1")
+            .bind(owner.owner_id)
+            .fetch_one(&state.pool)
+            .await;
     match owned_org_count {
         Ok((count,)) if count >= ORG_QUOTA_PER_USER => {
             return StatusCode::TOO_MANY_REQUESTS.into_response();

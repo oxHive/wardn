@@ -17,9 +17,20 @@ use axum::{
     routing::{any, delete, get, patch, post, put},
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
 use tower_governor::{
     GovernorError, GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor,
 };
+
+/// How often the `/users` rate limiter's per-IP state map is swept of
+/// entries that haven't been touched recently. `tower_governor` does not do
+/// this on its own — its own README example spawns exactly this kind of
+/// timer, and without one the map only grows, one entry per distinct source
+/// IP that has ever hit `POST /users`. Left unbounded, that's a
+/// memory-exhaustion vector on the very endpoint this rate limiter exists to
+/// protect (trivially reachable with many source addresses — an IPv6 /64, a
+/// botnet — each only needing to send one request to add an entry).
+const GOVERNOR_CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 
 async fn healthz() -> &'static str {
     "ok"
@@ -37,7 +48,11 @@ async fn healthz() -> &'static str {
 /// under one shared quota rather than failing outright; since production
 /// (`main.rs`) always serves through a real listener with `ConnectInfo`
 /// wired up, this fallback is never reached outside tests, and genuine
-/// per-peer-IP limiting is unaffected.
+/// per-peer-IP limiting is unaffected. If it ever *did* fire in a real
+/// deployment (e.g. some future entrypoint that skips
+/// `into_make_service_with_connect_info`), the failure mode is fail-shut,
+/// not fail-open: every caller would collapse into one shared bucket and
+/// hit the rate limit *sooner* than intended, never later.
 #[derive(Debug, Clone, Copy)]
 struct PeerIpOrFallbackKeyExtractor;
 
@@ -68,6 +83,19 @@ pub fn app(state: AppState) -> Router {
         .burst_size(5)
         .finish()
         .expect("static governor config values are always valid");
+
+    // `app()` is called once per process in production (`main.rs`) and once
+    // per test — either way, a background sweep that outlives the caller's
+    // interest in it is harmless: it just runs until the process (or test
+    // binary) exits.
+    let limiter = registration_governor_config.limiter().clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(GOVERNOR_CLEANUP_INTERVAL).await;
+            limiter.retain_recent();
+        }
+    });
+
     let registration_limiter = GovernorLayer::new(registration_governor_config);
 
     Router::new()

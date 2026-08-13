@@ -450,24 +450,48 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
+/// Looks up a user's pending outbox row, if any, and deletes it —
+/// `test_state`'s `AppState` has no `sqld_admin_url`, so inline provisioning
+/// never succeeds and every user/org created against it leaves a `pending`
+/// row behind. Callers must hold `common::lock_outbox` for the duration of
+/// any test that uses this, per this file's convention (see
+/// `create_user_still_succeeds_when_inline_provisioning_fails` above).
+async fn delete_pending_outbox_row(pool: &sqlx::PgPool, owner_type: &str, owner_id: Uuid) {
+    let row: Result<(Uuid,), sqlx::Error> = sqlx::query_as(
+        "SELECT id FROM namespace_provisioning_outbox WHERE owner_type = $1 AND owner_id = $2",
+    )
+    .bind(owner_type)
+    .bind(owner_id)
+    .fetch_one(pool)
+    .await;
+    if let Ok((outbox_id,)) = row {
+        common::delete_outbox_row(pool, outbox_id).await;
+    }
+}
+
 /// Real server, real TCP client — `tower_governor`'s IP extraction needs a
 /// genuine `ConnectInfo`, which `oneshot` never provides (see
 /// `tests/org_proxy_test.rs`'s `spawn_gateway` for the same pattern used for
 /// h2c tests). Sends more requests than the configured limit from one
-/// address and asserts the overflow gets 429.
+/// address and asserts the first 5 (the configured burst) succeed and the
+/// next 2 are rejected — not just that the *last* one is, which wouldn't
+/// distinguish real per-IP burst-then-limit behavior from a degenerate
+/// "everything is 429" or "nothing is ever limited" implementation.
 #[tokio::test]
 async fn post_users_rate_limits_by_ip() {
     let pool = test_pool().await;
+    let _lock = common::lock_outbox(&pool).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(test_state(pool))
+    let app = hivewarden::app(test_state(pool.clone()))
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
 
     let client = reqwest::Client::new();
-    let mut last_status = None;
+    let mut statuses = Vec::new();
+    let mut created_user_ids = Vec::new();
     // One more than the configured burst — see src/lib.rs's governor config
     // for the exact number this must exceed.
     for _ in 0..7 {
@@ -481,22 +505,42 @@ async fn post_users_rate_limits_by_ip() {
             .send()
             .await
             .unwrap();
-        last_status = Some(resp.status());
+        let status = resp.status().as_u16();
+        if status == 201 {
+            let body = resp.bytes().await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let user_id: Uuid = body["user_id"].as_str().unwrap().parse().unwrap();
+            created_user_ids.push(user_id);
+        }
+        statuses.push(status);
     }
+
     assert_eq!(
-        last_status.unwrap().as_u16(),
-        429,
-        "expected the request past the rate limit to be rejected"
+        statuses[..5],
+        [201, 201, 201, 201, 201],
+        "expected the burst of 5 to succeed: {statuses:?}"
     );
+    assert_eq!(
+        statuses[5..],
+        [429, 429],
+        "expected the requests past the burst to be rejected: {statuses:?}"
+    );
+
+    for user_id in created_user_ids {
+        delete_pending_outbox_row(&pool, "user", user_id).await;
+        delete_namespace(&user_id.to_string()).await;
+    }
 }
 
 #[tokio::test]
 async fn create_org_is_capped_per_user() {
     let pool = test_pool().await;
-    let app = hivewarden::app(test_state(pool));
-    let (_user_id, api_key) =
+    let _lock = common::lock_outbox(&pool).await;
+    let app = hivewarden::app(test_state(pool.clone()));
+    let (user_id, api_key) =
         register(app.clone(), &format!("orgquota-{}@example.com", Uuid::new_v4())).await;
 
+    let mut org_ids = Vec::new();
     // The cap is 10 (see src/registration.rs's ORG_QUOTA_PER_USER) — create
     // exactly that many, all of which must succeed, then confirm the next
     // one is rejected.
@@ -515,6 +559,12 @@ async fn create_org_is_capped_per_user() {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED, "org {i} should have succeeded");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let org_id: Uuid = created["org_id"].as_str().unwrap().parse().unwrap();
+        org_ids.push(org_id);
     }
 
     let resp = app
@@ -530,4 +580,95 @@ async fn create_org_is_capped_per_user() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    delete_pending_outbox_row(&pool, "user", user_id).await;
+    delete_namespace(&user_id.to_string()).await;
+    for org_id in org_ids {
+        delete_pending_outbox_row(&pool, "org", org_id).await;
+        delete_namespace(&org_id.to_string()).await;
+    }
+}
+
+/// Regression test for the org-creation quota (`ORG_QUOTA_PER_USER`,
+/// `src/registration.rs`): the quota must count orgs the caller actually
+/// *created* (`orgs.created_by`), not orgs where they merely hold a role
+/// happening to be named `owner`. Role names are assignable by any org
+/// `org:manage_members` holder via `add_member`/`assign_member_role` — if
+/// the quota were still keyed on role name, an attacker could create 10
+/// orgs of their own (within their own quota) and add a victim to each as
+/// an `owner`-named role, permanently exhausting the victim's quota using
+/// nothing but the victim's email address, without the victim ever
+/// creating anything.
+#[tokio::test]
+async fn org_membership_via_an_owner_named_role_does_not_count_against_the_quota() {
+    let pool = test_pool().await;
+    let _lock = common::lock_outbox(&pool).await;
+    let app = hivewarden::app(test_state(pool.clone()));
+
+    // The "victim": a plain registered user who never creates anything.
+    let (victim_id, victim_key) =
+        register(app.clone(), &format!("victim-{}@example.com", Uuid::new_v4())).await;
+
+    // Seed an org the victim did not create, and drop them into it under a
+    // role literally named `owner` — the same shape `add_member` +
+    // `assign_member_role` would produce, done directly via SQL here the
+    // way `tests/org_proxy_test.rs`'s `seed_org_member` seeds roles.
+    let attacker_org_id = Uuid::new_v4();
+    let role_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO orgs (id, name, created_by) VALUES ($1, $2, NULL)")
+        .bind(attacker_org_id)
+        .bind(format!("attacker-org-{attacker_org_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO roles (id, org_id, name) VALUES ($1, $2, 'owner')")
+        .bind(role_id)
+        .bind(attacker_org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO org_members (org_id, user_id, role_id) VALUES ($1, $2, $3)")
+        .bind(attacker_org_id)
+        .bind(victim_id)
+        .bind(role_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // The victim can still create their own full quota of 10 orgs — being
+    // an `owner`-role member of an org they didn't create must not count.
+    let mut org_ids = Vec::new();
+    for i in 0..10 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/orgs")
+                    .header(header::AUTHORIZATION, format!("Bearer {victim_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"name":"victim-org-{i}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "org {i} should have succeeded — victim's own quota is unaffected by attacker-assigned membership"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let org_id: Uuid = created["org_id"].as_str().unwrap().parse().unwrap();
+        org_ids.push(org_id);
+    }
+
+    delete_pending_outbox_row(&pool, "user", victim_id).await;
+    delete_namespace(&victim_id.to_string()).await;
+    for org_id in org_ids {
+        delete_pending_outbox_row(&pool, "org", org_id).await;
+        delete_namespace(&org_id.to_string()).await;
+    }
 }
