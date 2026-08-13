@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use hivemind_gateway::{AppState, app, config::Config, db, observability, provisioning};
+use hivewarden::{AppState, app, config::Config, db, observability, provisioning};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::EnvFilter;
 
@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         .with_metrics_handle(metrics_handle)
         .with_metrics_token(config.metrics_token.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivemind-gateway listening on {}", config.listen_addr);
+    tracing::info!("hivewarden listening on {}", config.listen_addr);
     axum::serve(listener, app(state)).await?;
     Ok(())
 }

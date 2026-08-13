@@ -1,6 +1,6 @@
-# hivemind-gateway Org Membership Management + Self-Service API Keys — Design
+# hivewarden Org Membership Management + Self-Service API Keys — Design
 
-**Status:** Approved. Fourth sub-project of `hivemind-gateway`, built on the walking skeleton, org roles, and database provisioning automation.
+**Status:** Approved. Fourth sub-project of `hivewarden`, built on the walking skeleton, org roles, and database provisioning automation.
 
 ## Goal
 

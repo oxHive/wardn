@@ -1,4 +1,4 @@
-# hivemind-gateway
+# hivewarden
 
 The commercial/paid layer for [`hivemind`](https://github.com/oxhive/hivemind) — a
 memory MCP server for AI coding agents. `hivemind` never knows this exists: the
@@ -16,7 +16,7 @@ database provisioning (`POST /users` and `POST /orgs` now create their own
 sqld namespaces — no more hand-seeding), org membership management,
 self-service API keys, and observability (see below). Billing, rate
 limiting, a general admin API, and alerting don't exist yet — see the memory
-entries tagged `project:hivemind-gateway` for the current state and plan, or
+entries tagged `project:hivewarden` for the current state and plan, or
 `docs/superpowers/plans/2026-08-11-walking-skeleton.md` for how this was built.
 
 ## Quickstart

@@ -1,4 +1,4 @@
-//! Prometheus metrics for hivemind-gateway. One global recorder for the
+//! Prometheus metrics for hivewarden. One global recorder for the
 //! whole process, installed once in `main.rs` — see `AppState::metrics_handle`
 //! for why every other call site builds a local, uninstalled handle instead.
 

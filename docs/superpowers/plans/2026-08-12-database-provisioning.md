@@ -137,7 +137,7 @@ Leave every other part of `src/auth.rs` (imports, `KEY_MARKER`, `generate_api_ke
 Replace the full contents of `src/main.rs` with:
 
 ```rust
-use hivemind_gateway::{AppState, app, config::Config, db};
+use hivewarden::{AppState, app, config::Config, db};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -147,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(pool, config.sqld_url.clone())
         .with_sqld_admin_url(config.sqld_admin_url.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivemind-gateway listening on {}", config.listen_addr);
+    tracing::info!("hivewarden listening on {}", config.listen_addr);
     axum::serve(listener, app(state)).await?;
     Ok(())
 }
@@ -190,7 +190,7 @@ Run (from the repo root, with the dev Postgres/sqld up via `podman-compose up -d
 ```sh
 SQLD_ADMIN_URL=http://127.0.0.1:8090 cargo run
 ```
-Expected: starts and logs `hivemind-gateway listening on 127.0.0.1:8787`. Ctrl-C to stop, then confirm it refuses to start at all without `SQLD_ADMIN_URL` set:
+Expected: starts and logs `hivewarden listening on 127.0.0.1:8787`. Ctrl-C to stop, then confirm it refuses to start at all without `SQLD_ADMIN_URL` set:
 ```sh
 unset SQLD_ADMIN_URL; cargo run
 ```
@@ -259,8 +259,8 @@ serde_json = "1"
 Create `tests/provisioning_test.rs`:
 
 ```rust
-use hivemind_gateway::db;
-use hivemind_gateway::provisioning::{self, OutboxRow};
+use hivewarden::db;
+use hivewarden::provisioning::{self, OutboxRow};
 use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -406,7 +406,7 @@ async fn fetch_pending_returns_only_pending_rows() {
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `cargo test --test provisioning_test`
-Expected: compile failure — `hivemind_gateway::provisioning` doesn't exist yet.
+Expected: compile failure — `hivewarden::provisioning` doesn't exist yet.
 
 - [ ] **Step 4: Implement `src/provisioning.rs`**
 
@@ -626,8 +626,8 @@ Create `tests/registration_test.rs`:
 ```rust
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivemind_gateway::auth::AppState;
-use hivemind_gateway::db;
+use hivewarden::auth::AppState;
+use hivewarden::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -655,7 +655,7 @@ async fn delete_namespace(name: &str) {
 async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let email = format!("register-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -677,7 +677,7 @@ async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let user_id = created["user_id"].as_str().unwrap().to_string();
     let api_key = created["api_key"].as_str().unwrap();
-    assert!(api_key.starts_with(hivemind_gateway::auth::KEY_MARKER));
+    assert!(api_key.starts_with(hivewarden::auth::KEY_MARKER));
 
     // Prove the namespace was actually provisioned: write through it, read
     // it back, via the real router, exactly the way a real client would.
@@ -736,7 +736,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     // fail without failing the request itself.
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url("http://127.0.0.1:1".to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let email = format!("register-fail-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -773,7 +773,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --test registration_test`
-Expected: compile failure — `hivemind_gateway::registration` and `POST /users` don't exist yet.
+Expected: compile failure — `hivewarden::registration` and `POST /users` don't exist yet.
 
 - [ ] **Step 3: Implement `src/registration.rs`**
 
@@ -989,7 +989,7 @@ This is the only change to `src/roles.rs` — the function body and its doc comm
 
 - [ ] **Step 2: Write the failing tests**
 
-Append to `tests/registration_test.rs` (`hivemind_gateway::db` is already imported at the top of this file from Task 3 — no new import needed here):
+Append to `tests/registration_test.rs` (`hivewarden::db` is already imported at the top of this file from Task 3 — no new import needed here):
 
 ```rust
 async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {
@@ -1019,7 +1019,7 @@ async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {
 async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_user_id, api_key) = seed_registered_user(app.clone()).await;
 
@@ -1100,7 +1100,7 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
 async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     // A workspace-owned key: real row, valid hash, but owner_type != "user".
     let workspace_id = uuid::Uuid::new_v4();
@@ -1117,7 +1117,7 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = hivemind_gateway::auth::generate_api_key();
+    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key();
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'workspace', $3, $4, $5)",
@@ -1478,7 +1478,7 @@ Replace the full contents of `src/main.rs` with:
 ```rust
 use std::time::Duration;
 
-use hivemind_gateway::{AppState, app, config::Config, db, provisioning};
+use hivewarden::{AppState, app, config::Config, db, provisioning};
 
 /// How often the background provisioning worker retries pending outbox
 /// rows. See `docs/superpowers/specs/2026-08-12-database-provisioning-design.md`.
@@ -1501,7 +1501,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(pool, config.sqld_url.clone())
         .with_sqld_admin_url(config.sqld_admin_url.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivemind-gateway listening on {}", config.listen_addr);
+    tracing::info!("hivewarden listening on {}", config.listen_addr);
     axum::serve(listener, app(state)).await?;
     Ok(())
 }

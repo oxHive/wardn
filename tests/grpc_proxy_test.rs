@@ -15,8 +15,8 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use base64::Engine as _;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hivemind_gateway::auth::{self, AppState};
-use hivemind_gateway::db;
+use hivewarden::auth::{self, AppState};
+use hivewarden::db;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -102,7 +102,7 @@ async fn seed_owner(pool: &sqlx::PgPool, namespace: &str) -> String {
 async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });

@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivemind_gateway::auth::AppState;
-use hivemind_gateway::db;
+use hivewarden::auth::AppState;
+use hivewarden::db;
 use tower::ServiceExt;
 
 mod common;
@@ -31,7 +31,7 @@ async fn delete_namespace(name: &str) {
 async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let email = format!("register-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -53,7 +53,7 @@ async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let user_id = created["user_id"].as_str().unwrap().to_string();
     let api_key = created["api_key"].as_str().unwrap();
-    assert!(api_key.starts_with(hivemind_gateway::auth::KEY_MARKER));
+    assert!(api_key.starts_with(hivewarden::auth::KEY_MARKER));
 
     // Prove the namespace was actually provisioned: write through it, read
     // it back, via the real router, exactly the way a real client would.
@@ -117,7 +117,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     // fail without failing the request itself.
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url("http://127.0.0.1:1".to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let email = format!("register-fail-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -158,7 +158,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
 async fn create_user_with_an_already_registered_email_returns_409() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let email = format!("dupe-{}@example.com", uuid::Uuid::new_v4());
     let register = || {
@@ -222,7 +222,7 @@ async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {
 async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_user_id, api_key) = seed_registered_user(app.clone()).await;
 
@@ -306,7 +306,7 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
 async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     // A workspace-owned key: real row, valid hash, but owner_type != "user".
     let workspace_id = uuid::Uuid::new_v4();
@@ -323,7 +323,7 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = hivemind_gateway::auth::generate_api_key();
+    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key();
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'workspace', $3, $4, $5)",

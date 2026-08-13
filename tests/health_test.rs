@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use hivemind_gateway::AppState;
-use hivemind_gateway::db;
+use hivewarden::AppState;
+use hivewarden::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -17,7 +17,7 @@ fn test_sqld_url() -> String {
 #[tokio::test]
 async fn healthz_returns_ok() {
     let pool = test_pool().await;
-    let app = hivemind_gateway::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
     let resp = app
         .oneshot(
             Request::builder()

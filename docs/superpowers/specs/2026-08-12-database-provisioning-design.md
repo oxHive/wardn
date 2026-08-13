@@ -1,6 +1,6 @@
-# hivemind-gateway Database Provisioning Automation — Design
+# hivewarden Database Provisioning Automation — Design
 
-**Status:** Approved. Third sub-project of `hivemind-gateway`, built on the walking skeleton (`docs/superpowers/specs/2026-08-11-walking-skeleton-design.md`) and org roles (`docs/superpowers/specs/2026-08-11-org-roles-design.md`).
+**Status:** Approved. Third sub-project of `hivewarden`, built on the walking skeleton (`docs/superpowers/specs/2026-08-11-walking-skeleton-design.md`) and org roles (`docs/superpowers/specs/2026-08-11-org-roles-design.md`).
 
 ## Goal
 

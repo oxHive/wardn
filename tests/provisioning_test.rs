@@ -1,5 +1,5 @@
-use hivemind_gateway::db;
-use hivemind_gateway::provisioning::{self, OutboxRow};
+use hivewarden::db;
+use hivewarden::provisioning::{self, OutboxRow};
 use uuid::Uuid;
 
 mod common;

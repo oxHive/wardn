@@ -1,4 +1,4 @@
-use hivemind_gateway::db;
+use hivewarden::db;
 use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {

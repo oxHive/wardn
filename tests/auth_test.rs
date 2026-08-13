@@ -2,8 +2,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hivemind_gateway::auth::{self, AppState, AuthedOwner};
-use hivemind_gateway::db;
+use hivewarden::auth::{self, AppState, AuthedOwner};
+use hivewarden::db;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ fn test_app(pool: sqlx::PgPool) -> Router {
         .route("/whoami", get(whoami))
         .layer(axum::middleware::from_fn_with_state(
             AppState::new(pool.clone(), test_sqld_url()),
-            hivemind_gateway::auth::auth_middleware,
+            hivewarden::auth::auth_middleware,
         ))
         .with_state(AppState::new(pool, test_sqld_url()))
 }

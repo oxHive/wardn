@@ -1,6 +1,6 @@
-# hivemind-gateway Walking Skeleton — Design
+# hivewarden Walking Skeleton — Design
 
-**Status:** Approved. First sub-project of `hivemind-gateway`. Decomposed from the full gateway scope described in `hivemind-vs-gateway-split.md` (the boundary-map doc — the full `HIVEMIND_GATEWAY_SPEC.md` it references does not exist on this machine; this spec works from the boundary map's "Gateway Development Checklist" and its own judgment for anything the checklist doesn't cover).
+**Status:** Approved. First sub-project of `hivewarden`. Decomposed from the full gateway scope described in `hivemind-vs-gateway-split.md` (the boundary-map doc — the full `HIVEMIND_GATEWAY_SPEC.md` it references does not exist on this machine; this spec works from the boundary map's "Gateway Development Checklist" and its own judgment for anything the checklist doesn't cover).
 
 ## Goal
 

@@ -107,7 +107,7 @@ Run: `cargo build`
 Expected: succeeds, no errors.
 
 Run: `cargo test`
-Expected: the full existing suite still passes bare, with zero test file changes — `tests/org_admin_test.rs` and every other test file only ever call `hivemind_gateway::app(state)` over real HTTP; none of them import `org_admin`/`org::admin` directly, so this move is invisible to every existing test.
+Expected: the full existing suite still passes bare, with zero test file changes — `tests/org_admin_test.rs` and every other test file only ever call `hivewarden::app(state)` over real HTTP; none of them import `org_admin`/`org::admin` directly, so this move is invisible to every existing test.
 
 - [ ] **Step 5: Commit**
 
@@ -137,8 +137,8 @@ Create `tests/org_members_test.rs`:
 ```rust
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivemind_gateway::auth::AppState;
-use hivemind_gateway::db;
+use hivewarden::auth::AppState;
+use hivewarden::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -222,7 +222,7 @@ async fn bootstrap_role_id(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> uuid::Uui
 async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -306,7 +306,7 @@ async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
 async fn add_member_rejects_an_unregistered_email() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -338,7 +338,7 @@ async fn add_member_rejects_an_unregistered_email() {
 async fn add_member_rejects_a_duplicate_invite() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -387,7 +387,7 @@ async fn add_member_rejects_a_duplicate_invite() {
 async fn remove_member_revokes_org_access_but_not_the_personal_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -477,7 +477,7 @@ async fn remove_member_revokes_org_access_but_not_the_personal_key() {
 async fn remove_member_returns_404_for_a_non_member() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -734,8 +734,8 @@ Create `tests/api_keys_test.rs`:
 ```rust
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivemind_gateway::auth::AppState;
-use hivemind_gateway::db;
+use hivewarden::auth::AppState;
+use hivewarden::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -785,7 +785,7 @@ async fn register(app: axum::Router, email: &str) -> (uuid::Uuid, String) {
 async fn list_keys_shows_the_registration_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -817,7 +817,7 @@ async fn list_keys_shows_the_registration_key() {
 async fn create_key_mints_an_independent_second_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_id, first_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -885,7 +885,7 @@ async fn create_key_mints_an_independent_second_key() {
 async fn revoke_key_stops_only_that_key_from_authenticating() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_id, first_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -979,7 +979,7 @@ async fn revoke_key_stops_only_that_key_from_authenticating() {
 async fn revoke_key_returns_404_for_someone_elses_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_a_id, key_a) =
         register(app.clone(), &format!("keys-a-{}@example.com", uuid::Uuid::new_v4())).await;

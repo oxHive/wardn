@@ -1,14 +1,14 @@
 [package]
-name = "hivemind-gateway"
+name = "hivewarden"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "hivemind_gateway"
+name = "hivewarden"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hivemind-gateway"
+name = "hivewarden"
 path = "src/main.rs"
 
 [dependencies]

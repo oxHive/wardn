@@ -12,7 +12,7 @@ COPY src ./src
 
 # sqlx::migrate!("./migrations") embeds the migration SQL into the binary
 # at compile time — migrations/ must exist here, but not in the runtime image.
-RUN cargo build --release --bin hivemind-gateway
+RUN cargo build --release --bin hivewarden
 
 # Runtime
 FROM debian:bookworm-slim
@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/hivemind-gateway /usr/local/bin/hivemind-gateway
+COPY --from=builder /build/target/release/hivewarden /usr/local/bin/hivewarden
 
 EXPOSE 8787
-ENTRYPOINT ["/usr/local/bin/hivemind-gateway"]
+ENTRYPOINT ["/usr/local/bin/hivewarden"]

@@ -2,9 +2,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivemind_gateway::auth::AppState;
-use hivemind_gateway::db;
-use hivemind_gateway::observability;
+use hivewarden::auth::AppState;
+use hivewarden::db;
+use hivewarden::observability;
 use std::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ async fn metrics_endpoint_requires_valid_bearer_token() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle)
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     // No Authorization header at all — rejected by metrics_handler's own
     // token check (this route sits outside auth_middleware, so it must
@@ -94,7 +94,7 @@ async fn metrics_endpoint_requires_valid_bearer_token() {
 async fn metrics_endpoint_rejects_when_token_unset() {
     let pool = test_pool().await;
     let state = AppState::new(pool, test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     // No Authorization header at all.
     let resp = app
@@ -169,7 +169,7 @@ async fn successful_request_increments_counter_and_histogram() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle.clone())
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
@@ -221,7 +221,7 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle.clone())
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
@@ -288,7 +288,7 @@ async fn metrics_endpoint_reports_pg_pool_gauges() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle)
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivemind_gateway::app(state);
+    let app = hivewarden::app(state);
 
     let resp = app
         .oneshot(

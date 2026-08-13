@@ -2,8 +2,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hivemind_gateway::auth::{self, AppState, AuthedOwner};
-use hivemind_gateway::{db, routing};
+use hivewarden::auth::{self, AppState, AuthedOwner};
+use hivewarden::{db, routing};
 use tower::ServiceExt;
 use uuid::Uuid;
 

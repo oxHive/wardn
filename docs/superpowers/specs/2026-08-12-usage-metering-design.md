@@ -1,6 +1,6 @@
-# hivemind-gateway Usage Metering — Design
+# hivewarden Usage Metering — Design
 
-**Status:** Approved. Fifth sub-project of `hivemind-gateway`, built on the walking skeleton, org roles, database provisioning, and org membership/API keys.
+**Status:** Approved. Fifth sub-project of `hivewarden`, built on the walking skeleton, org roles, database provisioning, and org membership/API keys.
 
 ## Goal
 

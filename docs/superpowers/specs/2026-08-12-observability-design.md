@@ -1,6 +1,6 @@
-# hivemind-gateway Observability — Design
+# hivewarden Observability — Design
 
-**Status:** Approved. Sixth sub-project of `hivemind-gateway`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, and usage metering.
+**Status:** Approved. Sixth sub-project of `hivewarden`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, and usage metering.
 
 ## Goal
 
