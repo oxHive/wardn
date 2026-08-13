@@ -29,11 +29,12 @@ pub struct CreateUserResponse {
 async fn insert_user(
     pool: &PgPool,
     email: &str,
+    api_key_pepper: &[u8],
 ) -> Result<(Uuid, String, OutboxRow), sqlx::Error> {
     let user_id = Uuid::new_v4();
     let outbox_id = Uuid::new_v4();
     let namespace = user_id.to_string();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(api_key_pepper);
 
     let mut tx = pool.begin().await?;
     sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
@@ -94,7 +95,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Response {
-    match insert_user(&state.pool, &req.email).await {
+    match insert_user(&state.pool, &req.email, state.api_key_pepper.as_bytes()).await {
         Ok((user_id, api_key, outbox_row)) => {
             if let Err(e) = provisioning::attempt_provisioning(
                 &state.pool,

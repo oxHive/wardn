@@ -7,6 +7,7 @@ pub struct Config {
     pub sqld_admin_url: String,
     pub listen_addr: String,
     pub metrics_token: String,
+    pub api_key_pepper: String,
 }
 
 impl Config {
@@ -19,6 +20,15 @@ impl Config {
                  401s GET /metrics"
             );
         }
+        let api_key_pepper =
+            std::env::var("API_KEY_PEPPER").context("API_KEY_PEPPER must be set")?;
+        if api_key_pepper.len() < 32 {
+            anyhow::bail!(
+                "API_KEY_PEPPER must be at least 32 characters — it's the server-side secret \
+                 folded into every API key's hash, and a short value defeats the point of a \
+                 pepper"
+            );
+        }
         Ok(Config {
             database_url: std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
             sqld_url: std::env::var("SQLD_URL").context("SQLD_URL must be set")?,
@@ -27,6 +37,7 @@ impl Config {
             listen_addr: std::env::var("LISTEN_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8787".to_string()),
             metrics_token,
+            api_key_pepper,
         })
     }
 }

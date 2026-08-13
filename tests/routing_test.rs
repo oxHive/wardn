@@ -1,3 +1,5 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
@@ -28,10 +30,10 @@ fn test_app(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/whereami", get(whereami))
         .layer(axum::middleware::from_fn_with_state(
-            AppState::new(pool.clone(), test_sqld_url()),
+            AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()),
             auth::auth_middleware,
         ))
-        .with_state(AppState::new(pool, test_sqld_url()))
+        .with_state(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()))
 }
 
 async fn seed_valid_key(pool: &sqlx::PgPool, owner_type: &str, owner_id: Uuid) -> String {
@@ -42,7 +44,7 @@ async fn seed_valid_key(pool: &sqlx::PgPool, owner_type: &str, owner_id: Uuid) -
         .execute(pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, $3, $4, $5, $6)",

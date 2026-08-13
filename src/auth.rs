@@ -1,17 +1,18 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::{SaltString, rand_core::OsRng};
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use hmac::{Hmac, Mac};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use rand::Rng;
+use sha2::Sha256;
 use sqlx::PgPool;
-use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::db;
 use crate::proxy::ProxyClient;
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -46,10 +47,20 @@ pub struct AppState {
     /// `with_metrics_token` sets a real value — `main.rs` does this from
     /// `Config::metrics_token`.
     pub metrics_token: String,
+    /// Server-side secret folded into every API key's HMAC-SHA256 hash (see
+    /// `hash_key`/`generate_api_key`/`verify_key` below). Unlike
+    /// `metrics_token`/`sqld_admin_url`, this is a **required constructor
+    /// argument**, not an optional builder: it's load-bearing for every
+    /// single authenticated request (`auth_middleware`), not one endpoint —
+    /// an empty-by-default value here would make every key verification
+    /// silently use an empty pepper until someone remembered to set it,
+    /// which is exactly the kind of security-relevant omission that should
+    /// be a compile error, not a runtime footgun.
+    pub api_key_pepper: String,
 }
 
 impl AppState {
-    pub fn new(pool: PgPool, sqld_url: String) -> Self {
+    pub fn new(pool: PgPool, sqld_url: String, api_key_pepper: String) -> Self {
         let metrics_handle = PrometheusBuilder::new().build_recorder().handle();
         Self {
             pool,
@@ -58,6 +69,7 @@ impl AppState {
             client: ProxyClient::new(),
             metrics_handle,
             metrics_token: String::new(),
+            api_key_pepper,
         }
     }
 
@@ -100,9 +112,28 @@ pub fn prefix_of(full_key: &str) -> Option<String> {
     Some(prefix)
 }
 
+/// HMAC-SHA256 of `full_key`, keyed by `pepper`, as a lowercase hex string.
+///
+/// API keys are 32 random characters from a 62-symbol alphabet (~190 bits of
+/// entropy, see `generate_api_key`) — nowhere near brute-forceable, so unlike
+/// a human-chosen password there is no reason to slow this down with a
+/// memory-hard KDF. A slow hash on every request (this project previously
+/// used argon2) is instead a straightforward unauthenticated-DoS amplifier:
+/// every request, including ones with a bogus key, paid ~50-100ms of CPU and
+/// ~19MiB of memory synchronously on the async runtime. HMAC-SHA256 costs
+/// about 1 microsecond. `pepper` is a server-side secret distinct from any
+/// individual key, so a leaked `key_hash` column alone doesn't let an
+/// attacker forge valid keys without also knowing it.
+fn hash_key(pepper: &[u8], full_key: &str) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(pepper).expect("HMAC-SHA256 accepts a key of any length");
+    mac.update(full_key.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
 /// Generates a new API key. Returns (full_key, prefix, hash) — the caller
 /// shows full_key to the user exactly once and stores only prefix+hash.
-pub fn generate_api_key() -> (String, String, String) {
+pub fn generate_api_key(pepper: &[u8]) -> (String, String, String) {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
     let random_part: String = (0..32)
@@ -110,33 +141,22 @@ pub fn generate_api_key() -> (String, String, String) {
         .collect();
     let full_key = format!("{KEY_MARKER}{random_part}");
     let prefix: String = random_part.chars().take(PREFIX_LEN).collect();
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(full_key.as_bytes(), &salt)
-        .expect("argon2 hashing does not fail for well-formed input")
-        .to_string();
+    let hash = hash_key(pepper, &full_key);
     (full_key, prefix, hash)
 }
 
-/// A real argon2 hash of a fixed throwaway secret, computed once. Used only
-/// to spend the same CPU on the "no such prefix" path as on a genuine
-/// verification (see `auth_middleware`); it can never match a presented key.
-static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
-    let salt = SaltString::from_b64("aGl2ZW1pbmRnYXRld2F5")
-        .expect("static salt is valid base64 of a legal length");
-    Argon2::default()
-        .hash_password(b"not-a-real-api-key", &salt)
-        .expect("argon2 hashing does not fail for well-formed input")
-        .to_string()
-});
-
-pub fn verify_key(full_key: &str, hash: &str) -> bool {
-    let Ok(parsed_hash) = PasswordHash::new(hash) else {
+/// Verifies `full_key` against a stored `hash` (hex-encoded HMAC-SHA256).
+/// `Mac::verify_slice` compares in constant time internally — no separate
+/// constant-time-comparison crate needed for this path.
+pub fn verify_key(pepper: &[u8], full_key: &str, hash: &str) -> bool {
+    let Ok(expected) = hex::decode(hash) else {
         return false;
     };
-    Argon2::default()
-        .verify_password(full_key.as_bytes(), &parsed_hash)
-        .is_ok()
+    let Ok(mut mac) = HmacSha256::new_from_slice(pepper) else {
+        return false;
+    };
+    mac.update(full_key.as_bytes());
+    mac.verify_slice(&expected).is_ok()
 }
 
 /// Inserted into request extensions by `auth_middleware` on a successful
@@ -185,12 +205,15 @@ pub async fn auth_middleware(
         // here, and both already get the same 401.
         //
         // Verify against a throwaway hash anyway. Without this, an unknown
-        // prefix returns in microseconds while a known-but-wrong key pays the
-        // full argon2 cost — a timing oracle for "does this prefix exist".
-        let _ = verify_key(full_key, &DUMMY_HASH);
+        // prefix returns in microseconds while a known-but-wrong key pays
+        // the same ~1us HMAC cost as a genuine verification — a timing
+        // oracle for "does this prefix exist," same reasoning as before this
+        // moved from argon2 to HMAC, just at a much smaller absolute cost.
+        let dummy_hash = hash_key(state.api_key_pepper.as_bytes(), "not-a-real-api-key");
+        let _ = verify_key(state.api_key_pepper.as_bytes(), full_key, &dummy_hash);
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    if !verify_key(full_key, &row.key_hash) {
+    if !verify_key(state.api_key_pepper.as_bytes(), full_key, &row.key_hash) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 

@@ -90,7 +90,7 @@ async fn create_org(app: axum::Router, owner_key: &str, name: &str) -> String {
 #[tokio::test]
 async fn successful_query_request_emits_a_usage_event() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, api_key) =
@@ -144,7 +144,7 @@ async fn successful_query_request_emits_a_usage_event() {
 #[tokio::test]
 async fn rejected_request_does_not_emit_a_usage_event() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, api_key) =
@@ -225,7 +225,7 @@ async fn response_head_timeout_emits_a_504_usage_event() {
     // Only the *proxy* leg points at the black hole; `sqld_admin_url` stays
     // real, since registration provisions the namespace through it.
     let (black_hole, mut accepted) = spawn_black_hole_sqld().await;
-    let state = AppState::new(pool.clone(), black_hole).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), black_hole, common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, api_key) =
@@ -277,7 +277,7 @@ async fn response_head_timeout_emits_a_504_usage_event() {
 #[tokio::test]
 async fn org_shared_request_emits_org_id_field() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (_owner_id, owner_key) =
@@ -319,7 +319,7 @@ async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = hivewarden::app(
-        AppState::new(pool, test_sqld_url()).with_sqld_admin_url(admin_url()),
+        AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url()),
     );
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -371,7 +371,7 @@ async fn sync_request_emits_protocol_sync() {
     .execute(&pool)
     .await
     .unwrap();
-    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key();
+    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",

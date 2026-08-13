@@ -11,6 +11,8 @@
 //! direct one — including the `grpc-status` that arrives in HTTP/2 *trailers*,
 //! not headers.
 
+mod common;
+
 use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use base64::Engine as _;
 use bytes::Bytes;
@@ -80,7 +82,7 @@ async fn seed_owner(pool: &sqlx::PgPool, namespace: &str) -> String {
     .execute(pool)
     .await
     .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -102,7 +104,7 @@ async fn seed_owner(pool: &sqlx::PgPool, namespace: &str) -> String {
 async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });

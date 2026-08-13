@@ -1,3 +1,5 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine as _;
@@ -68,7 +70,7 @@ async fn seed_owner_with_namespace(pool: &sqlx::PgPool, namespace: &str) -> Stri
     .execute(pool)
     .await
     .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -131,7 +133,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -144,7 +146,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
     .await
     .unwrap();
 
-    let state = AppState::new(pool, test_sqld_url());
+    let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
     let app = hivewarden::app(state);
 
     // sqld exposes a version endpoint at GET /version on its default HTTP
@@ -197,7 +199,7 @@ async fn namespace_isolation_through_full_router() {
     let secret_a = format!("A-secret-{owner_a_id}");
     let secret_b = format!("B-secret-{owner_b_id}");
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     // Owner A creates their table and writes their secret.
     let create_and_insert_a = format!(
@@ -297,7 +299,7 @@ async fn client_cannot_smuggle_a_namespace_selector() {
     let victim_key = seed_owner_with_namespace(&pool, &victim_ns).await;
 
     let victim_secret = format!("VICTIM-{victim_id}");
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     let (status, _) = query_through_gateway(
         app.clone(),
@@ -333,7 +335,7 @@ async fn client_cannot_smuggle_a_namespace_selector() {
 #[tokio::test]
 async fn missing_key_never_reaches_sqld() {
     let pool = test_pool().await;
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let resp = app
         .oneshot(
             Request::builder()
@@ -356,7 +358,7 @@ async fn valid_key_with_no_mapping_returns_404() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -369,7 +371,7 @@ async fn valid_key_with_no_mapping_returns_404() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let resp = app
         .oneshot(
             Request::builder()

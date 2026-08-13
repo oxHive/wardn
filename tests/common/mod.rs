@@ -173,6 +173,15 @@ pub fn metrics_handle() -> PrometheusHandle {
 /// empty, so any such test must set a real value to reach the 200 path.
 pub const TEST_METRICS_TOKEN: &str = "test-metrics-token";
 
+/// Fixed pepper every test that calls `auth::generate_api_key`/`verify_key`
+/// or constructs an `AppState` should use — `AppState::new` now requires an
+/// `api_key_pepper` argument (unlike `metrics_token`, it's not an optional
+/// builder), and a key seeded with one pepper only verifies successfully
+/// against an `AppState` built with the *same* pepper. Must be at least 32
+/// characters (see `config.rs`'s validation) even though tests don't go
+/// through `Config::from_env`.
+pub const TEST_API_KEY_PEPPER: &str = "test-api-key-pepper-do-not-use-in-prod";
+
 /// Parses a single **unlabeled** gauge/counter value out of Prometheus text
 /// exposition format — a line of exactly `metric_name value`, no `{...}`
 /// label block. Returns `0.0` if the metric has no samples yet in this

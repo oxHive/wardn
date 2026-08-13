@@ -1,3 +1,5 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use bytes::Bytes;
@@ -111,7 +113,7 @@ async fn seed_org_member_full(
         .execute(pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -186,7 +188,7 @@ async fn member_with_db_query_reaches_the_orgs_namespace() {
     let (org_id, key) = seed_org_member(&pool, &namespace, &[Permission::DbQuery]).await;
     let secret = format!("ORG-SECRET-{}", Uuid::new_v4());
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     let (status, body) = query_org_with_body(
         app.clone(),
@@ -234,7 +236,7 @@ async fn member_of_one_org_cannot_use_x_org_id_for_a_different_org() {
     // membership org A's user has nothing to do with.
     let (org_b, _key_b) = seed_org_member(&pool, &namespace_b, &[Permission::DbQuery]).await;
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let (status, body) =
         query_org_with_body(app, &key_a, org_b, r#"{"statements":["SELECT 1"]}"#).await;
     assert_eq!(
@@ -267,7 +269,7 @@ async fn a_role_created_and_assigned_over_http_authorizes_the_proxy() {
     )
     .await;
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     // Before: the bootstrap role has no db:query, so the proxy path is shut.
     let status =
@@ -356,7 +358,7 @@ async fn member_without_db_query_is_forbidden() {
     create_namespace(&namespace).await;
     let (org_id, key) = seed_org_member(&pool, &namespace, &[Permission::DbSync]).await;
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let status = query_org_via_gateway(app, &key, org_id, r#"{"statements":["SELECT 1"]}"#).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
@@ -392,7 +394,7 @@ async fn non_member_is_forbidden() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -405,7 +407,7 @@ async fn non_member_is_forbidden() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let status =
         query_org_via_gateway(app, &full_key, org_id, r#"{"statements":["SELECT 1"]}"#).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -437,7 +439,7 @@ async fn workspace_owned_key_is_forbidden_from_org_namespace_access() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'workspace', $3, $4, $5)",
@@ -451,7 +453,7 @@ async fn workspace_owned_key_is_forbidden_from_org_namespace_access() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let status = query_org_via_gateway(
         app,
         &full_key,
@@ -472,7 +474,7 @@ async fn malformed_org_id_header_is_a_bad_request() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -485,7 +487,7 @@ async fn malformed_org_id_header_is_a_bad_request() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let resp = app
         .oneshot(
             Request::builder()
@@ -505,7 +507,7 @@ async fn malformed_org_id_header_is_a_bad_request() {
 async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url()));
+    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });

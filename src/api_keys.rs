@@ -61,7 +61,7 @@ pub async fn create_key(State(state): State<AppState>, Extension(owner): Extensi
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let (full_key, prefix, hash) = auth::generate_api_key();
+    let (full_key, prefix, hash) = auth::generate_api_key(state.api_key_pepper.as_bytes());
     let id = Uuid::new_v4();
     let result = sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)

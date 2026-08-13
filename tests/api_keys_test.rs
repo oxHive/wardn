@@ -1,3 +1,5 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use hivewarden::auth::AppState;
@@ -50,7 +52,7 @@ async fn register(app: axum::Router, email: &str) -> (uuid::Uuid, String) {
 #[tokio::test]
 async fn list_keys_shows_the_registration_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, api_key) =
@@ -82,7 +84,7 @@ async fn list_keys_shows_the_registration_key() {
 #[tokio::test]
 async fn create_key_mints_an_independent_second_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, first_key) =
@@ -150,7 +152,7 @@ async fn create_key_mints_an_independent_second_key() {
 #[tokio::test]
 async fn revoke_key_stops_only_that_key_from_authenticating() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_id, first_key) =
@@ -244,7 +246,7 @@ async fn revoke_key_stops_only_that_key_from_authenticating() {
 #[tokio::test]
 async fn revoke_key_returns_404_for_someone_elses_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
     let app = hivewarden::app(state);
 
     let (user_a_id, key_a) =
