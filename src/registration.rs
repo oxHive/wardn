@@ -11,6 +11,31 @@ use crate::org::admin::is_unique_violation;
 use crate::provisioning::{self, OutboxRow};
 use crate::roles;
 
+/// Validates and lowercases an email address before it reaches the
+/// database. Deliberately simple (not a full RFC 5321 parser): non-empty,
+/// within RFC 5321's 254-character maximum, exactly one `@` with non-empty
+/// local and domain parts, no control characters or whitespace. Returns the
+/// normalized (lowercased) form on success, or the 400 response to return
+/// directly on failure.
+fn validate_and_normalize_email(email: &str) -> Result<String, Response> {
+    let bad_request = || (StatusCode::BAD_REQUEST, "invalid email address").into_response();
+
+    if email.is_empty() || email.len() > 254 {
+        return Err(bad_request());
+    }
+    if email.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(bad_request());
+    }
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(bad_request());
+    };
+    if local.is_empty() || domain.is_empty() {
+        return Err(bad_request());
+    }
+    Ok(email.to_lowercase())
+}
+
 #[derive(Deserialize)]
 pub struct CreateUserRequest {
     pub email: String,
@@ -95,7 +120,11 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Response {
-    match insert_user(&state.pool, &req.email, state.api_key_pepper.as_bytes()).await {
+    let email = match validate_and_normalize_email(&req.email) {
+        Ok(email) => email,
+        Err(resp) => return resp,
+    };
+    match insert_user(&state.pool, &email, state.api_key_pepper.as_bytes()).await {
         Ok((user_id, api_key, outbox_row)) => {
             if let Err(e) = provisioning::attempt_provisioning(
                 &state.pool,

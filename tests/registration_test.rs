@@ -303,6 +303,72 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
 }
 
 #[tokio::test]
+async fn create_user_rejects_invalid_email() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
+    let app = hivewarden::app(state);
+
+    for bad_email in ["", "not-an-email", "@example.com", "foo@", "foo@@example.com"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/users")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"email":"{bad_email}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "expected {bad_email:?} to be rejected"
+        );
+    }
+}
+
+#[tokio::test]
+async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates() {
+    let pool = test_pool().await;
+    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
+    let app = hivewarden::app(state);
+    let email = format!("MixedCase-{}@Example.com", uuid::Uuid::new_v4());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/users")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Same address, different case — must be treated as the same account.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/users")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{}"}}"#,
+                    email.to_lowercase()
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
