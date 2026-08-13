@@ -38,6 +38,7 @@ serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.12", features = ["stream"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+tower_governor = "0.8.0"
 
 [dev-dependencies]
 bytes = "1"

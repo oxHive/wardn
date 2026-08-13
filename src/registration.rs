@@ -219,6 +219,12 @@ async fn insert_org(
     ))
 }
 
+/// Maximum orgs a single user may create. This project has no billing/plan
+/// tiers yet to derive a real number from — 10 is a conservative ceiling
+/// against runaway namespace creation (finding #3/#4), not a product
+/// decision about how many orgs a legitimate customer needs.
+const ORG_QUOTA_PER_USER: i64 = 10;
+
 /// `POST /orgs` — authenticated (goes through `auth_middleware` normally,
 /// reads the caller via the `AuthedOwner` extension). Only a personal
 /// (`owner_type == "user"`) key may create an org — a workspace/org-owned
@@ -236,6 +242,24 @@ pub async fn create_org(
 ) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    let owned_org_count: Result<(i64,), sqlx::Error> = sqlx::query_as(
+        "SELECT COUNT(*) FROM org_members om
+         JOIN roles r ON r.id = om.role_id
+         WHERE om.user_id = $1 AND r.name = 'owner'",
+    )
+    .bind(owner.owner_id)
+    .fetch_one(&state.pool)
+    .await;
+    match owned_org_count {
+        Ok((count,)) if count >= ORG_QUOTA_PER_USER => {
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("org quota check failed: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     match insert_org(&state.pool, &req.name, owner.owner_id).await {
         Ok((org_id, outbox_row)) => {

@@ -55,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
         .with_metrics_token(config.metrics_token.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("hivewarden listening on {}", config.listen_addr);
-    axum::serve(listener, app(state)).await?;
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

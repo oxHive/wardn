@@ -3,6 +3,7 @@ use axum::http::{Request, StatusCode, header};
 use hivewarden::auth::AppState;
 use hivewarden::db;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 mod common;
 
@@ -20,11 +21,39 @@ fn admin_url() -> String {
     std::env::var("SQLD_ADMIN_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string())
 }
 
+fn test_state(pool: sqlx::PgPool) -> AppState {
+    AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
+}
+
 async fn delete_namespace(name: &str) {
     let _ = reqwest::Client::new()
         .delete(format!("{}/v1/namespaces/{name}", admin_url()))
         .send()
         .await;
+}
+
+/// Registers a new user and returns `(user_id, api_key)` — same pattern as
+/// the `register` helper in `org_members_test.rs`/`api_keys_test.rs`.
+async fn register(app: axum::Router, email: &str) -> (Uuid, String) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/users")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let user_id: Uuid = created["user_id"].as_str().unwrap().parse().unwrap();
+    let api_key = created["api_key"].as_str().unwrap().to_string();
+    (user_id, api_key)
 }
 
 #[tokio::test]
@@ -419,4 +448,86 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// Real server, real TCP client — `tower_governor`'s IP extraction needs a
+/// genuine `ConnectInfo`, which `oneshot` never provides (see
+/// `tests/org_proxy_test.rs`'s `spawn_gateway` for the same pattern used for
+/// h2c tests). Sends more requests than the configured limit from one
+/// address and asserts the overflow gets 429.
+#[tokio::test]
+async fn post_users_rate_limits_by_ip() {
+    let pool = test_pool().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = hivewarden::app(test_state(pool))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let mut last_status = None;
+    // One more than the configured burst — see src/lib.rs's governor config
+    // for the exact number this must exceed.
+    for _ in 0..7 {
+        let resp = client
+            .post(format!("http://{addr}/users"))
+            .header("content-type", "application/json")
+            .body(format!(
+                r#"{{"email":"ratelimit-{}@example.com"}}"#,
+                Uuid::new_v4()
+            ))
+            .send()
+            .await
+            .unwrap();
+        last_status = Some(resp.status());
+    }
+    assert_eq!(
+        last_status.unwrap().as_u16(),
+        429,
+        "expected the request past the rate limit to be rejected"
+    );
+}
+
+#[tokio::test]
+async fn create_org_is_capped_per_user() {
+    let pool = test_pool().await;
+    let app = hivewarden::app(test_state(pool));
+    let (_user_id, api_key) =
+        register(app.clone(), &format!("orgquota-{}@example.com", Uuid::new_v4())).await;
+
+    // The cap is 10 (see src/registration.rs's ORG_QUOTA_PER_USER) — create
+    // exactly that many, all of which must succeed, then confirm the next
+    // one is rejected.
+    for i in 0..10 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/orgs")
+                    .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"name":"org-{i}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED, "org {i} should have succeeded");
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/orgs")
+                .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"one-too-many"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
 }
