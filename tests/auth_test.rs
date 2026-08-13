@@ -167,3 +167,34 @@ async fn revoked_key_returns_401() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// Proves the pepper is actually load-bearing in `verify_key` — every other
+/// test in this suite uses exactly one pepper value throughout, so on its
+/// own the suite would still pass even if `hash_key` silently ignored its
+/// `pepper` argument. Also covers two rejection paths no other test hits: a
+/// well-formed-length-but-wrong hex hash, and a hash string that isn't hex
+/// at all (`hex::decode` failure).
+#[tokio::test]
+async fn a_key_does_not_verify_under_a_different_pepper() {
+    let (full_key, _, hash) = auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
+    assert!(auth::verify_key(
+        common::TEST_API_KEY_PEPPER.as_bytes(),
+        &full_key,
+        &hash
+    ));
+    assert!(!auth::verify_key(
+        b"a-different-pepper-at-least-32-chars-long",
+        &full_key,
+        &hash
+    ));
+    assert!(!auth::verify_key(
+        common::TEST_API_KEY_PEPPER.as_bytes(),
+        &full_key,
+        "deadbeef"
+    ));
+    assert!(!auth::verify_key(
+        common::TEST_API_KEY_PEPPER.as_bytes(),
+        &full_key,
+        "not-hex-at-all"
+    ));
+}

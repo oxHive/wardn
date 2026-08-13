@@ -24,7 +24,7 @@ impl Config {
             std::env::var("API_KEY_PEPPER").context("API_KEY_PEPPER must be set")?;
         if api_key_pepper.len() < 32 {
             anyhow::bail!(
-                "API_KEY_PEPPER must be at least 32 characters — it's the server-side secret \
+                "API_KEY_PEPPER must be at least 32 bytes — it's the server-side secret \
                  folded into every API key's hash, and a short value defeats the point of a \
                  pepper"
             );

@@ -145,6 +145,14 @@ pub fn generate_api_key(pepper: &[u8]) -> (String, String, String) {
     (full_key, prefix, hash)
 }
 
+/// A well-formed but unreachable 32-byte hex tag — no `full_key`/`pepper`
+/// combination will ever hash to this. Used by `auth_middleware`'s
+/// unknown-prefix path (see below) to run `verify_key` exactly once against
+/// *something*, the same as the known-prefix path, without needing to derive
+/// the throwaway value from the pepper first: `Mac::verify_slice` rejects any
+/// tag that isn't the real one regardless of what the wrong tag actually is.
+const DUMMY_KEY_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 /// Verifies `full_key` against a stored `hash` (hex-encoded HMAC-SHA256).
 /// `Mac::verify_slice` compares in constant time internally — no separate
 /// constant-time-comparison crate needed for this path.
@@ -204,13 +212,13 @@ pub async fn auth_middleware(
         // matches non-revoked rows, so the two cases are indistinguishable
         // here, and both already get the same 401.
         //
-        // Verify against a throwaway hash anyway. Without this, an unknown
-        // prefix returns in microseconds while a known-but-wrong key pays
-        // the same ~1us HMAC cost as a genuine verification — a timing
-        // oracle for "does this prefix exist," same reasoning as before this
-        // moved from argon2 to HMAC, just at a much smaller absolute cost.
-        let dummy_hash = hash_key(state.api_key_pepper.as_bytes(), "not-a-real-api-key");
-        let _ = verify_key(state.api_key_pepper.as_bytes(), full_key, &dummy_hash);
+        // Verify against a throwaway hash anyway, so this path runs exactly
+        // one HMAC — same as the known-prefix path below — instead of
+        // returning in microseconds while a known-but-wrong key pays for a
+        // real verification: a timing oracle for "does this prefix exist,"
+        // same reasoning as before this moved from argon2 to HMAC, just at a
+        // much smaller absolute cost.
+        let _ = verify_key(state.api_key_pepper.as_bytes(), full_key, DUMMY_KEY_HASH);
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if !verify_key(state.api_key_pepper.as_bytes(), full_key, &row.key_hash) {
