@@ -423,7 +423,6 @@ pub async fn proxy_handler(
             emit_usage_event(StatusCode::GATEWAY_TIMEOUT);
             crate::observability::record_proxy_metrics(
                 protocol,
-                &namespace,
                 StatusCode::GATEWAY_TIMEOUT,
                 start.elapsed(),
             );
@@ -443,7 +442,6 @@ pub async fn proxy_handler(
     emit_usage_event(upstream_parts.status);
     crate::observability::record_proxy_metrics(
         protocol,
-        &namespace,
         upstream_parts.status,
         start.elapsed(),
     );

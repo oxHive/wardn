@@ -190,20 +190,25 @@ async fn successful_request_increments_counter_and_histogram() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let rendered = handle.render();
-    let namespace_label = format!("namespace=\"{user_id}\"");
     assert!(
         common::has_labeled_metric(
             &rendered,
             "gateway_proxy_requests_total",
-            &["protocol=\"query\"", "status_class=\"2xx\"", &namespace_label],
+            &["protocol=\"query\"", "status_class=\"2xx\""],
         ),
         "missing counter sample: {rendered}"
+    );
+    assert!(
+        !rendered.contains("gateway_proxy_requests_total{") || !rendered.lines().any(|line| {
+            line.starts_with("gateway_proxy_requests_total{") && line.contains("namespace=")
+        }),
+        "gateway_proxy_requests_total must not carry a namespace label: {rendered}"
     );
     assert!(
         common::has_labeled_metric(
             &rendered,
             "gateway_proxy_request_duration_seconds_count",
-            &["protocol=\"query\"", &namespace_label],
+            &["protocol=\"query\""],
         ),
         "missing histogram sample: {rendered}"
     );

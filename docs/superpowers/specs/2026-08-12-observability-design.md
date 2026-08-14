@@ -36,10 +36,12 @@ Registered alongside `/healthz` in `src/lib.rs`'s `app()`, outside the `auth_mid
 
 ### Metric catalog
 
+**Amendment (security hardening, `docs/superpowers/specs/2026-08-13-security-hardening-design.md`):** the `namespace` label originally on `gateway_proxy_requests_total`/`gateway_proxy_request_duration_seconds` was removed — combined with this endpoint's per-tenant traffic data, it created an unbounded, externally-triggerable (via anonymous `POST /users`) memory-growth vector in the metrics recorder. Per-tenant attribution stays available through the `usage`-target tracing events.
+
 | Name | Type | Labels | Emitted where |
 |---|---|---|---|
-| `gateway_proxy_requests_total` | counter | `protocol` (`query`/`sync`), `status_class` (`2xx`/`4xx`/`5xx`), `namespace` | `proxy_handler` (`src/proxy.rs`), same point as `emit_usage_event` |
-| `gateway_proxy_request_duration_seconds` | histogram | `protocol`, `namespace` | same point |
+| `gateway_proxy_requests_total` | counter | `protocol` (`query`/`sync`), `status_class` (`2xx`/`4xx`/`5xx`) | `proxy_handler` (`src/proxy.rs`), same point as `emit_usage_event` |
+| `gateway_proxy_request_duration_seconds` | histogram | `protocol` | same point |
 | `gateway_proxy_requests_in_flight` | gauge | (none) | RAII guard struct, incremented at `proxy_handler` entry, decremented in its `Drop` impl — covers every early-return path (401/403/404/504/502/200) without instrumenting each one individually |
 | `gateway_pg_pool_size` | gauge | (none) | computed at `/metrics` scrape time from `PgPool::size()` |
 | `gateway_pg_pool_idle` | gauge | (none) | computed at `/metrics` scrape time from `PgPool::num_idle()` |

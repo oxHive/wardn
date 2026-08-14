@@ -84,24 +84,26 @@ impl Default for InFlightGuard {
 /// the streaming gRPC body is the long-lived part, it says very little about
 /// how long the request really took (same caveat `src/proxy.rs` documents
 /// for its usage-event `duration_ms`).
-pub fn record_proxy_metrics(
-    protocol: &'static str,
-    namespace: &str,
-    status: StatusCode,
-    duration: Duration,
-) {
+///
+/// Deliberately carries **no per-tenant label**. `namespace` was dropped
+/// (security-hardening finding #4): every namespace is permanently retained
+/// in the Prometheus recorder's memory with no eviction, and every namespace
+/// is created by a `POST /users` call — an unbounded, externally-triggerable
+/// memory-growth vector. Per-tenant attribution stays available through the
+/// `usage`-target tracing events (`src/proxy.rs`'s `emit_usage_event`),
+/// which already carry `namespace`/`owner_id`/`org_id` and are designed for
+/// exactly this kind of high-cardinality data.
+pub fn record_proxy_metrics(protocol: &'static str, status: StatusCode, duration: Duration) {
     let status_class = format!("{}xx", status.as_u16() / 100);
     metrics::counter!(
         "gateway_proxy_requests_total",
         "protocol" => protocol,
         "status_class" => status_class,
-        "namespace" => namespace.to_string(),
     )
     .increment(1);
     metrics::histogram!(
         "gateway_proxy_request_duration_seconds",
         "protocol" => protocol,
-        "namespace" => namespace.to_string(),
     )
     .record(duration.as_secs_f64());
 }
