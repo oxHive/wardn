@@ -39,6 +39,12 @@ reqwest = { version = "0.12", features = ["stream"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 tower_governor = "0.8.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.33.0"
+tracing-loki = "0.2.7"
+url = "2.5.8"
 
 [dev-dependencies]
 bytes = "1"

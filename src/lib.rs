@@ -9,6 +9,7 @@ pub mod proxy;
 pub mod registration;
 pub mod roles;
 pub mod routing;
+pub mod telemetry;
 
 pub use auth::AppState;
 use axum::{
