@@ -27,6 +27,29 @@ services:
       - "127.0.0.1:8081:8080"
       - "127.0.0.1:8090:8090"
 
+  loki:
+    image: docker.io/grafana/loki:latest
+    # No host-published port: only hivewarden (log push) and grafana
+    # (query) need to reach it, both over the compose network.
+
+  tempo:
+    image: docker.io/grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro,Z
+    # No host-published port: only otel-collector (OTLP) and grafana
+    # (query) need to reach it.
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro,Z
+    depends_on:
+      - tempo
+    # No host-published port: only hivewarden needs to reach it, over the
+    # compose network.
+
   hivewarden:
     build:
       context: .
@@ -34,6 +57,8 @@ services:
     depends_on:
       - postgres
       - sqld
+      - otel-collector
+      - loki
     environment:
       # Container-to-container addresses (compose's internal DNS), not the
       # host-published loopback ports above — postgres/sqld are reachable
@@ -44,6 +69,8 @@ services:
       LISTEN_ADDR: 0.0.0.0:8787
       METRICS_TOKEN: dev-metrics-token
       API_KEY_PEPPER: dev-api-key-pepper-do-not-use-in-prod-min-32-chars
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      LOKI_URL: http://loki:3100
     # The gateway is the one service meant to be reachable — still loopback
     # only here since this compose file is for local dev, not production.
     ports:
