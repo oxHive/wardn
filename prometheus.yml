@@ -8,4 +8,4 @@ scrape_configs:
       # deployment. Set the gateway's actual METRICS_TOKEN here instead.
       credentials: dev-metrics-token
     static_configs:
-      - targets: ["gateway:8787"]
+      - targets: ["hivewarden:8787"]
