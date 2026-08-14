@@ -15,7 +15,7 @@ Pre-launch hardening. No specific incident is driving this — it's the last ope
 - **Prometheus `/metrics` endpoint**, not spans or a push-based system. Standard pull-based counters/histograms/gauges via the `metrics` facade crate + `metrics-exporter-prometheus`. Works with Grafana/Prometheus/most cloud monitors out of the box; no new infra dependency beyond a scrape target. Distributed tracing spans remain out of scope, same as usage metering's design explicitly deferred them.
 - **Full coverage: request-level, dependency health, and the provisioning worker.** Not just proxy traffic — also Postgres pool state, sqld reachability, and `namespace_provisioning_outbox` queue depth. The goal is "is the problem us, a dependency, or a stuck background job" answerable from one endpoint.
 - **`GET /metrics` requires a static bearer token (`METRICS_TOKEN`)**, checked before rendering, superseding this slice's original brainstorming choice of "unauthenticated, Prometheus convention." Reversed during Task 2's review: the `namespace` label (see below) makes an unauthenticated `/metrics` a tenant-enumeration endpoint — any caller can list every tenant UUID, request volume, and latency profile, and anonymous `POST /users` can grow that per-tenant label set without bound. A shared-secret token is a small addition (one new `Config` field, one header check) and closes the enumeration-read path. It does **not** address the growth-vector concern — an unauthenticated caller can still repeatedly `POST /users` to grow the recorder's distinct-`namespace` label set, since the token only gates *reading* `/metrics`, not writing metrics — that risk remains separately tracked below ("No cap on distinct namespace values in this slice"). Distinct from the API-key system — this is a single deployment-wide secret, not a per-caller credential.
-- **`namespace` is a label on proxy request metrics**, despite unbounded cardinality risk as tenant count grows. Chosen over the cardinality-safe alternative (protocol/status-class only) because per-tenant breakdown at a glance is worth more than the safety margin right now. **No cap on distinct namespace values in this slice** — accepted risk, consistent with this project's existing pattern of documenting known-but-not-yet-urgent risks (e.g. no rate limiting yet either) rather than over-engineering a mitigation before it's needed. Revisit if/when tenant count grows or rate limiting ships, whichever comes first.
+- **`namespace` was originally a label on proxy request metrics**, accepted at the time despite unbounded cardinality risk as tenant count grows — chosen over the cardinality-safe alternative (protocol/status-class only) because per-tenant breakdown at a glance seemed worth more than the safety margin. That trade held only until the growth vector it created (every namespace permanently retained in the recorder, every namespace mintable via an anonymous `POST /users`) was flagged during the security-hardening audit; the label was removed there (see the amendment on the metric catalog table below). Per-tenant attribution now lives only in the `usage`-target tracing events, which were always the intended home for high-cardinality data.
 
 **Explicitly out of scope for this slice:**
 - Distributed tracing spans (deferred by usage metering's own design; nothing here changes that).
@@ -51,7 +51,7 @@ Registered alongside `/healthz` in `src/lib.rs`'s `app()`, outside the `auth_mid
 | `gateway_provisioning_attempts_total` | counter | `outcome` (`success`/`failure`) | `attempt_provisioning` (`src/provisioning.rs`) |
 | `gateway_provisioning_worker_run_duration_seconds` | histogram | (none) | wraps one full tick of `run_worker`'s per-tick batch loop |
 
-Only `namespace` carries per-tenant cardinality; every other label is a small fixed set.
+Every label above is a small fixed set (`protocol`, `status_class`, `outcome`) — `namespace` was the only per-tenant, unbounded-cardinality label, and it was removed (see the amendment above).
 
 ### Local dev stack (`podman-compose.yml`)
 
@@ -96,6 +96,6 @@ Grafana's anonymous viewer access is local-dev-only, matching this file's existi
 ## Non-goals / risks carried forward
 
 - No alerting rules or dashboards shipped — this slice makes data available; consuming it is whoever operates the deployed service's job.
-- No cap on `namespace` label cardinality — accepted risk, revisit if/when tenant count grows or rate limiting ships.
+- ~~No cap on `namespace` label cardinality~~ — closed by the security-hardening audit, which removed the `namespace` label from proxy metrics entirely rather than capping it (see the metric catalog amendment above).
 - No per-caller `/metrics` authentication (a single shared `METRICS_TOKEN`, not per-scraper credentials) — sufficient for one Prometheus scrape target; revisit if multiple distinct consumers need separately revocable access.
 - No distributed tracing spans — deferred by usage metering's design, unchanged here.

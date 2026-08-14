@@ -174,7 +174,29 @@ async fn successful_request_increments_counter_and_histogram() {
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
 
+    // The recorder is a shared process-wide static (`common::metrics_handle()`),
+    // so a bare presence check after the request can't prove *this* request
+    // caused it — a sibling test hitting the same `protocol`/`status_class`
+    // combination (e.g. `in_flight_gauge_returns_to_baseline_...` below) can
+    // satisfy a presence check on its own even if this request recorded
+    // nothing. Snapshotting the counter/histogram-count under the lock,
+    // before the request, and asserting an exact +1 delta afterward proves
+    // the request itself is what moved them.
     let _guard = common::proxy_metrics_lock();
+    let before = handle.render();
+    let counter_before = common::extract_labeled_metric(
+        &before,
+        "gateway_proxy_requests_total",
+        &["protocol=\"query\"", "status_class=\"2xx\""],
+    )
+    .unwrap_or(0.0);
+    let histogram_count_before = common::extract_labeled_metric(
+        &before,
+        "gateway_proxy_request_duration_seconds_count",
+        &["protocol=\"query\""],
+    )
+    .unwrap_or(0.0);
+
     let resp = app
         .oneshot(
             Request::builder()
@@ -190,13 +212,17 @@ async fn successful_request_increments_counter_and_histogram() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let rendered = handle.render();
-    assert!(
-        common::has_labeled_metric(
-            &rendered,
-            "gateway_proxy_requests_total",
-            &["protocol=\"query\"", "status_class=\"2xx\""],
-        ),
-        "missing counter sample: {rendered}"
+    let counter_after = common::extract_labeled_metric(
+        &rendered,
+        "gateway_proxy_requests_total",
+        &["protocol=\"query\"", "status_class=\"2xx\""],
+    )
+    .unwrap_or(0.0);
+    assert_eq!(
+        counter_after,
+        counter_before + 1.0,
+        "gateway_proxy_requests_total{{protocol=\"query\",status_class=\"2xx\"}} did not \
+         increase by exactly 1: {rendered}"
     );
     assert!(
         !rendered.contains("gateway_proxy_requests_total{") || !rendered.lines().any(|line| {
@@ -204,13 +230,17 @@ async fn successful_request_increments_counter_and_histogram() {
         }),
         "gateway_proxy_requests_total must not carry a namespace label: {rendered}"
     );
-    assert!(
-        common::has_labeled_metric(
-            &rendered,
-            "gateway_proxy_request_duration_seconds_count",
-            &["protocol=\"query\""],
-        ),
-        "missing histogram sample: {rendered}"
+    let histogram_count_after = common::extract_labeled_metric(
+        &rendered,
+        "gateway_proxy_request_duration_seconds_count",
+        &["protocol=\"query\""],
+    )
+    .unwrap_or(0.0);
+    assert_eq!(
+        histogram_count_after,
+        histogram_count_before + 1.0,
+        "gateway_proxy_request_duration_seconds_count{{protocol=\"query\"}} did not increase \
+         by exactly 1: {rendered}"
     );
     drop(_guard);
 

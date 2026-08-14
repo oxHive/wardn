@@ -13,11 +13,12 @@ use crate::auth::AppState;
 
 /// Renders the process's Prometheus metrics as exposition-format text.
 /// Registered outside `auth_middleware` in `src/lib.rs` alongside
-/// `/healthz`, so it checks its own bearer token here instead: the
-/// per-tenant `namespace` label on proxy metrics (`record_proxy_metrics`)
-/// would otherwise let anyone enumerate every tenant's UUID and traffic
-/// volume through this endpoint. `state.metrics_token` empty (the default
-/// from `AppState::new`) fails closed — every request is rejected until
+/// `/healthz`, so it checks its own bearer token here instead: an
+/// unauthenticated `/metrics` would let anyone read live proxy traffic
+/// volume, Postgres pool occupancy, and provisioning-queue depth — internals
+/// useful for gauging load and timing an attack, not something this endpoint
+/// should hand out for free. `state.metrics_token` empty (the default from
+/// `AppState::new`) fails closed — every request is rejected until
 /// `main.rs` sets a real token via `with_metrics_token`. On an authorized
 /// call, it also refreshes the Postgres pool gauges (`refresh_pg_pool_gauges`)
 /// as a side effect before rendering.
