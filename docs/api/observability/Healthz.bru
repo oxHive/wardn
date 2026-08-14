@@ -1,0 +1,16 @@
+meta {
+  name: Healthz
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/healthz
+  body: none
+  auth: none
+}
+
+docs {
+  Public, unauthenticated. Always returns 200 with body "ok" — a liveness
+  check, not a dependency check.
+}

@@ -1,0 +1,25 @@
+meta {
+  name: List API Keys
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api-keys
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{apiKey}}
+}
+
+docs {
+  Self-service only — 403 if the caller's key is org/workspace-owned rather
+  than a personal ("user") key. Never returns key_hash.
+
+  200 OK:
+  [
+    { "id": "<uuid>", "prefix": "<string>", "created_at": "<datetime>", "revoked_at": null }
+  ]
+}

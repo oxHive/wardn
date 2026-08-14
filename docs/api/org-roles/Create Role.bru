@@ -1,0 +1,41 @@
+meta {
+  name: Create Role
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/orgs/:org_id/roles
+  body: json
+  auth: bearer
+}
+
+params:path {
+  org_id: 00000000-0000-0000-0000-000000000000
+}
+
+auth:bearer {
+  token: {{apiKey}}
+}
+
+body:json {
+  {
+    "name": "read-only",
+    "permissions": ["db:query"]
+  }
+}
+
+docs {
+  Requires org:manage_roles on the caller's role in this org.
+  `permissions` is validated against the fixed catalog:
+    org:manage_members, org:manage_roles, db:query, db:sync
+  Duplicate permission strings are deduplicated rather than erroring.
+  409 Conflict on a duplicate role name within the org.
+
+  201 Created:
+  {
+    "id": "<uuid>",
+    "name": "read-only",
+    "permissions": ["db:query"]
+  }
+}

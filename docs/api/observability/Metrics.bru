@@ -1,0 +1,23 @@
+meta {
+  name: Metrics
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/metrics
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{metricsToken}}
+}
+
+docs {
+  Prometheus exposition format. Requires Authorization: Bearer <METRICS_TOKEN>
+  — matches the METRICS_TOKEN env var the gateway was started with (see
+  podman-compose.yml / .env.example). Gated because per-tenant labels on
+  proxy metrics would otherwise let anyone enumerate tenant UUIDs and
+  traffic volume.
+}

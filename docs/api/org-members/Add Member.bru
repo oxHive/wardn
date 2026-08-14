@@ -1,0 +1,37 @@
+meta {
+  name: Add Member
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/orgs/:org_id/members
+  body: json
+  auth: bearer
+}
+
+params:path {
+  org_id: 00000000-0000-0000-0000-000000000000
+}
+
+auth:bearer {
+  token: {{apiKey}}
+}
+
+body:json {
+  {
+    "email": "teammate@example.com",
+    "role_id": "00000000-0000-0000-0000-000000000000"
+  }
+}
+
+docs {
+  Requires org:manage_members on the caller's role in this org.
+  `email` must belong to an already-registered user (via POST /users).
+
+  201 Created:
+  {
+    "user_id": "<uuid>",
+    "role_id": "<uuid>"
+  }
+}

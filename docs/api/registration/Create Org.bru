@@ -1,0 +1,35 @@
+meta {
+  name: Create Org
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/orgs
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{apiKey}}
+}
+
+body:json {
+  {
+    "name": "acme-corp"
+  }
+}
+
+docs {
+  Requires a valid personal API key (Authorization: Bearer <apiKey>).
+  Creates the org, a bootstrap "owner" role holding every permission in the
+  catalog, and enrolls the caller into that role.
+
+  Rate-limited per caller (not per IP) — see the per-user quota in
+  registration::create_org.
+
+  201 Created:
+  {
+    "org_id": "<uuid>"
+  }
+}
