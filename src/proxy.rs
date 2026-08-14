@@ -12,6 +12,8 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use uuid::Uuid;
 
+use tracing::Instrument;
+
 use crate::auth::{AppState, AuthedOwner};
 use crate::roles::{self, Permission};
 use crate::routing;
@@ -202,6 +204,7 @@ fn org_id_header(headers: &HeaderMap) -> Option<Result<Uuid, ()>> {
     )
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn proxy_handler(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -408,7 +411,12 @@ pub async fn proxy_handler(
         }
     };
 
-    let upstream = match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, client.request(outbound)).await
+    let sqld_span = tracing::info_span!("sqld_request", protocol);
+    let upstream = match tokio::time::timeout(
+        RESPONSE_HEAD_TIMEOUT,
+        client.request(outbound).instrument(sqld_span),
+    )
+    .await
     {
         Ok(Ok(resp)) => resp,
         Ok(Err(e)) => {
