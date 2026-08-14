@@ -8,6 +8,15 @@ pub struct Config {
     pub listen_addr: String,
     pub metrics_token: String,
     pub api_key_pepper: String,
+    /// OTLP/gRPC endpoint traces are exported to (e.g.
+    /// `http://otel-collector:4317`). Optional: `None` means tracing spans
+    /// are created and logged normally but never exported anywhere —
+    /// `cargo test`/a bare `cargo run` must not require a collector.
+    pub otel_exporter_otlp_endpoint: Option<String>,
+    /// Base URL of a Loki instance to push logs to (e.g.
+    /// `http://loki:3100`). Optional: `None` means logs stay stdout-only,
+    /// exactly like today.
+    pub loki_url: Option<String>,
 }
 
 impl Config {
@@ -38,6 +47,8 @@ impl Config {
                 .unwrap_or_else(|_| "127.0.0.1:8787".to_string()),
             metrics_token,
             api_key_pepper,
+            otel_exporter_otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            loki_url: std::env::var("LOKI_URL").ok(),
         })
     }
 }
