@@ -13,14 +13,21 @@ services:
       - "127.0.0.1:5433:5432"
   sqld:
     image: ghcr.io/tursodatabase/libsql-server:latest
-    command: ["sqld", "--http-listen-addr=0.0.0.0:8080", "--enable-namespaces", "--admin-listen-addr=0.0.0.0:8090"]
+    command:
+      [
+        "sqld",
+        "--http-listen-addr=0.0.0.0:8080",
+        "--enable-namespaces",
+        "--admin-listen-addr=0.0.0.0:8090",
+      ]
     # sqld has no authentication of its own here, and its admin API can
     # create/delete any namespace with zero credentials — anything that can
     # reach these ports bypasses the gateway entirely. Loopback only.
     ports:
       - "127.0.0.1:8081:8080"
       - "127.0.0.1:8090:8090"
-  gateway:
+
+  hivewarden:
     build:
       context: .
       dockerfile: Dockerfile
@@ -36,10 +43,12 @@ services:
       SQLD_ADMIN_URL: http://sqld:8090
       LISTEN_ADDR: 0.0.0.0:8787
       METRICS_TOKEN: dev-metrics-token
+      API_KEY_PEPPER: dev-api-key-pepper-do-not-use-in-prod-min-32-chars
     # The gateway is the one service meant to be reachable — still loopback
     # only here since this compose file is for local dev, not production.
     ports:
       - "127.0.0.1:8787:8787"
+
   prometheus:
     image: docker.io/prom/prometheus:latest
     volumes:
@@ -51,7 +60,8 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
-      - gateway
+      - hivewarden
+
   grafana:
     image: docker.io/grafana/grafana:latest
     volumes:
