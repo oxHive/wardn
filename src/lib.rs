@@ -17,11 +17,14 @@ use axum::{
     extract::ConnectInfo,
     routing::{any, delete, get, patch, post, put},
 };
+use opentelemetry::trace::TraceContextExt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tower_governor::{
     GovernorError, GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor,
 };
+use tower_http::trace::TraceLayer;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// How often the `/users` rate limiter's per-IP state map is swept of
 /// entries that haven't been touched recently. `tower_governor` does not do
@@ -67,6 +70,28 @@ impl KeyExtractor for PeerIpOrFallbackKeyExtractor {
             .map(|ConnectInfo(addr)| addr.ip())
             .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)))
     }
+}
+
+/// Creates the one-per-request span `TraceLayer` attaches below. Stamps a
+/// `trace_id` field onto it immediately, read back from this span's own
+/// OTel context via `OpenTelemetrySpanExt` — this is what makes every JSON
+/// log line emitted during the request carry a `trace_id` (the fmt layer's
+/// default `with_current_span(true)` includes it), which is what Loki's
+/// derived field (`grafana/provisioning/datasources/loki.yml`) keys on to
+/// link a log line to its Tempo trace. Works whether or not the OTel layer
+/// is actually active (`main.rs`, Task 6) — with no OTel layer registered,
+/// `context().span().span_context()` is a valid-but-empty span context, and
+/// `trace_id` renders as all-zeroes rather than failing.
+fn make_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    let span = tracing::info_span!(
+        "http_request",
+        method = %request.method(),
+        path = %request.uri().path(),
+        trace_id = tracing::field::Empty,
+    );
+    let trace_id = span.context().span().span_context().trace_id();
+    span.record("trace_id", tracing::field::display(trace_id));
+    span
 }
 
 pub fn app(state: AppState) -> Router {
@@ -138,5 +163,6 @@ pub fn app(state: AppState) -> Router {
             "/users",
             post(registration::create_user).route_layer(registration_limiter),
         )
+        .layer(TraceLayer::new_for_http().make_span_with(make_span))
         .with_state(state)
 }
