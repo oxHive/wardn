@@ -51,6 +51,7 @@ pub struct CreateUserResponse {
 /// outbox row in one transaction. Returns the outbox row directly so the
 /// caller can make the inline provisioning attempt without a second round
 /// trip to read back what was just written.
+#[tracing::instrument(skip(pool, api_key_pepper))]
 async fn insert_user(
     pool: &PgPool,
     email: &str,
@@ -168,6 +169,7 @@ pub struct CreateOrgResponse {
 /// than duplicating it, but can't reuse `roles::create_role` itself since
 /// that function opens its own transaction and this one needs everything
 /// atomic with the org insert.
+#[tracing::instrument(skip(pool))]
 async fn insert_org(
     pool: &PgPool,
     name: &str,

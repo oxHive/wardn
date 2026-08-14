@@ -31,6 +31,7 @@ pub struct ApiKeyRow {
 /// key's row is invisible here rather than filtered out by the caller. A
 /// revoked key therefore looks identical to an unknown prefix to
 /// `auth_middleware`, which is fine: both already return the same 401.
+#[tracing::instrument(skip(pool))]
 pub async fn find_api_key_by_prefix(
     pool: &PgPool,
     prefix: &str,
@@ -44,6 +45,7 @@ pub async fn find_api_key_by_prefix(
     .await
 }
 
+#[tracing::instrument(skip(pool))]
 pub async fn find_database_mapping(
     pool: &PgPool,
     owner_type: &str,
