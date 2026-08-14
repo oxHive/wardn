@@ -1,7 +1,9 @@
 use std::time::Duration;
 
-use hivewarden::{AppState, app, config::Config, db, observability, provisioning};
+use hivewarden::{AppState, app, config::Config, db, observability, provisioning, telemetry};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 /// How often the background provisioning worker retries pending outbox
@@ -14,17 +16,46 @@ const SQLD_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // `Config::from_env` must run before the subscriber is built — whether
+    // the OTel/Loki layers exist at all depends on its output.
+    let config = Config::from_env()?;
+
+    // The OTel layer and the Loki layer are each `Option<Layer>` — a blanket
+    // impl in tracing_subscriber makes `Option<L>: Layer<S>` a no-op when
+    // `None`, so the subscriber degrades cleanly to today's stdout-JSON-only
+    // behavior when neither OTEL_EXPORTER_OTLP_ENDPOINT nor LOKI_URL is set.
+    let otel_layer = config
+        .otel_exporter_otlp_endpoint
+        .as_deref()
+        .map(telemetry::init_tracer)
+        .transpose()?
+        .map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
+
+    let mut loki_task = None;
+    let loki_layer = match config.loki_url.as_deref() {
+        Some(loki_url) => {
+            let (layer, task) = telemetry::init_loki_layer(loki_url)?;
+            loki_task = Some(task);
+            Some(layer)
+        }
+        None => None,
+    };
+
     // JSON output for aggregator-friendly NDJSON, but still honouring
     // `RUST_LOG` — `fmt().json()` alone hard-wires the level floor to INFO
     // with no way to raise or lower verbosity in a deployed environment,
     // which the plain `fmt::init()` this replaced did support.
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer().json())
+        .with(otel_layer)
+        .with(loki_layer)
         .init();
-    let config = Config::from_env()?;
+
+    if let Some(task) = loki_task {
+        tokio::spawn(task);
+    }
+
     let pool = db::connect(&config.database_url).await?;
 
     let metrics_handle = PrometheusBuilder::new()
