@@ -69,6 +69,7 @@ pub(crate) fn is_unique_violation(err: &sqlx::Error) -> bool {
         .unwrap_or(false)
 }
 
+#[tracing::instrument(skip(state, req))]
 pub async fn create_role(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -110,6 +111,7 @@ pub async fn create_role(
     }
 }
 
+#[tracing::instrument(skip(state))]
 pub async fn list_roles(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -139,6 +141,7 @@ pub async fn list_roles(
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn update_role(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -170,6 +173,7 @@ pub async fn update_role(
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn delete_role(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -191,6 +195,7 @@ pub async fn delete_role(
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn assign_member_role(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,

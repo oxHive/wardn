@@ -34,6 +34,7 @@ pub struct CreateKeyResponse {
 /// `ORDER BY created_at, id` — `id` is the tiebreaker so two keys sharing a
 /// `created_at` (same transaction timestamp) still order deterministically;
 /// tests and clients alike treat position 0 as "the oldest/registration key".
+#[tracing::instrument(skip(state))]
 pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
@@ -57,6 +58,7 @@ pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extensio
 /// `POST /api-keys` — mints an additional personal key for the caller. The
 /// full key is shown exactly once, exactly like `POST /users`'s
 /// registration response.
+#[tracing::instrument(skip(state))]
 pub async fn create_key(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
@@ -97,6 +99,7 @@ pub async fn create_key(State(state): State<AppState>, Extension(owner): Extensi
 /// revoked through this self-service endpoint even if it happened to share
 /// this caller's `user_id`. Idempotent: revoking an already-revoked key
 /// still `204`s.
+#[tracing::instrument(skip(state))]
 pub async fn revoke_key(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,

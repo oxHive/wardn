@@ -34,6 +34,7 @@ pub struct MemberSummary {
 /// `DELETE /orgs/:org_id/members/:user_id` requires — the offboarding tool the
 /// design spec chose over key revocation would be undrivable from this
 /// feature's own API surface.
+#[tracing::instrument(skip(state))]
 pub async fn list_members(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -68,6 +69,7 @@ pub async fn list_members(
 /// org by email. There is no pending-invitation state: the email must
 /// already match a `users` row (`404` if not), and the caller must hold
 /// `org:manage_members`.
+#[tracing::instrument(skip(state, req))]
 pub async fn add_member(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
@@ -161,6 +163,7 @@ pub async fn add_member(
 /// only the `org_members` row; never touches `users`/`api_keys`, so the
 /// removed member's personal key and any other org membership are
 /// untouched.
+#[tracing::instrument(skip_all)]
 pub async fn remove_member(
     State(state): State<AppState>,
     Extension(owner): Extension<AuthedOwner>,
