@@ -51,7 +51,7 @@ pub struct CreateUserResponse {
 /// outbox row in one transaction. Returns the outbox row directly so the
 /// caller can make the inline provisioning attempt without a second round
 /// trip to read back what was just written.
-#[tracing::instrument(skip(pool, api_key_pepper))]
+#[tracing::instrument(skip(pool, email, api_key_pepper))]
 async fn insert_user(
     pool: &PgPool,
     email: &str,
