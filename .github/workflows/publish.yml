@@ -1,0 +1,30 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: read
+      checks: write
+    uses: oxHive/pipelines/.github/workflows/rust-release.yml@v2
+    with:
+      package-name: oxhivemind
+      binary-name: hivemind
+      dashboard-dir: dashboard
+    secrets: inherit
+
+  publish-opencode:
+    permissions:
+      contents: read
+      id-token: write
+    uses: oxHive/pipelines/.github/workflows/npm-publish.yml@v2
+    with:
+      package-path: plugins/opencode
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
