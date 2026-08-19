@@ -23,7 +23,7 @@ use std::time::Duration;
 use tower_governor::{
     GovernorError, GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor,
 };
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// How often the `/users` rate limiter's per-IP state map is swept of
@@ -163,6 +163,17 @@ pub fn app(state: AppState) -> Router {
             "/users",
             post(registration::create_user).route_layer(registration_limiter),
         )
-        .layer(TraceLayer::new_for_http().make_span_with(make_span))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(make_span)
+                // Default `on_response` logs at DEBUG, which the default `info`
+                // level floor (`main.rs`) swallows entirely — meaning any
+                // request handler that never emits its own event (every
+                // control-plane handler except `proxy_handler`'s usage event)
+                // leaves no log line carrying this request's `trace_id` for
+                // Loki to correlate against its Tempo trace. Raising this to
+                // INFO gives every request exactly one such line for free.
+                .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
