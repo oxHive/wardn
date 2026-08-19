@@ -1,0 +1,29 @@
+# cargo-release configuration
+# Usage: cargo release patch / minor / major
+#        cargo release --execute patch   (dry-run by default)
+
+sign-commit = false
+sign-tag = false
+push = true
+publish = false                                            # crates.io publish is handled by GitHub Actions CI
+tag = true
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore: release v{{version}}"
+
+[[pre-release-replacements]]
+file = ".claude-plugin/plugin.json"
+search = "\"version\": \"[^\"]+\""
+replace = "\"version\": \"{{version}}\""
+exactly = 1
+
+[[pre-release-replacements]]
+file = "plugins/opencode/package.json"
+search = "\"version\": \"[^\"]+\""
+replace = "\"version\": \"{{version}}\""
+exactly = 1
+
+[[pre-release-replacements]]
+file = "dashboard/package.json"
+search = "\"version\": \"[^\"]+\""
+replace = "\"version\": \"{{version}}\""
+exactly = 1
