@@ -90,6 +90,38 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// Resolves on SIGINT (Ctrl+C, works everywhere) or SIGTERM (the signal
+/// `podman stop`/Kubernetes send, Unix-only — there is no non-Unix
+/// equivalent for `axum::serve` to wait on). Without this, either signal
+/// kills the process immediately: in-flight requests get their connection
+/// cut mid-response, and the provisioning worker/health-check loop (spawned
+/// tasks, not part of `axum::serve`) are aborted wherever they happened to
+/// be, mid-outbox-row-update included.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received, draining in-flight requests");
 }

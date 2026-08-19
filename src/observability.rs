@@ -152,6 +152,11 @@ pub async fn refresh_provisioning_outbox_gauges(pool: &PgPool) -> Result<(), sql
 /// blocks on a network call to sqld.
 pub async fn sqld_health_check_loop(client: reqwest::Client, sqld_url: String, interval: Duration) {
     let mut ticker = tokio::time::interval(interval);
+    // Default `Burst` behavior fires ticks back-to-back with no delay to
+    // catch up after the loop falls behind (e.g. a slow `check_sqld_up`
+    // call) — pointless here, since this loop only ever wants "at most once
+    // per `interval`," not a caught-up burst of stale checks.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
         let up = check_sqld_up(&client, &sqld_url).await;

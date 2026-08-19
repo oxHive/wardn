@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{AppState, AuthedOwner};
-use crate::org::admin::is_unique_violation;
+use crate::org::admin::{is_foreign_key_violation, is_unique_violation};
 use crate::roles::{self, Permission};
 
 #[derive(Deserialize)]
@@ -152,6 +152,13 @@ pub async fn add_member(
         Err(e) if is_unique_violation(&e) => {
             (StatusCode::CONFLICT, "user is already a member of this org").into_response()
         }
+        // The role lookup above and this insert are check-then-act: the role
+        // can be deleted in between (see `roles::delete_role`'s doc comment
+        // on the same race from the other side). `org_members.role_id
+        // REFERENCES roles(id)` turns that into a foreign-key violation here
+        // rather than a phantom insert — treated the same as if the lookup
+        // itself had found nothing.
+        Err(e) if is_foreign_key_violation(&e) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
             tracing::error!("add member failed: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

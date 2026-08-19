@@ -109,25 +109,38 @@ pub struct RoleWithPermissions {
     pub permissions: Vec<String>,
 }
 
+/// One query, not one-plus-N: the previous version issued a separate
+/// `role_permissions` query per role, which meant an org with 50 roles cost
+/// 51 round trips to list them. `LEFT JOIN` (not `JOIN`) keeps a
+/// zero-permission role in the result with a single `NULL` permission row,
+/// which the grouping loop below filters out.
+///
+/// Grouping relies on `ORDER BY r.name` keeping every row for the same role
+/// contiguous — true only because `roles.name` is unique per `org_id`
+/// (`UNIQUE (org_id, name)`, `migrations/0003_org_roles.sql`), so no other
+/// role can sort between two rows sharing the same `id`.
 pub async fn list_roles(pool: &PgPool, org_id: Uuid) -> Result<Vec<RoleWithPermissions>, sqlx::Error> {
-    let roles: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT id, name FROM roles WHERE org_id = $1 ORDER BY name")
-            .bind(org_id)
-            .fetch_all(pool)
-            .await?;
-    let mut out = Vec::with_capacity(roles.len());
-    for (id, name) in roles {
-        let permission_rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT permission FROM role_permissions WHERE role_id = $1 ORDER BY permission",
-        )
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
-        out.push(RoleWithPermissions {
-            id,
-            name,
-            permissions: permission_rows.into_iter().map(|(p,)| p).collect(),
-        });
+    let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT r.id, r.name, rp.permission
+         FROM roles r
+         LEFT JOIN role_permissions rp ON rp.role_id = r.id
+         WHERE r.org_id = $1
+         ORDER BY r.name, rp.permission",
+    )
+    .bind(org_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out: Vec<RoleWithPermissions> = Vec::new();
+    for (id, name, permission) in rows {
+        match out.last_mut() {
+            Some(last) if last.id == id => last.permissions.extend(permission),
+            _ => out.push(RoleWithPermissions {
+                id,
+                name,
+                permissions: permission.into_iter().collect(),
+            }),
+        }
     }
     Ok(out)
 }
@@ -235,11 +248,22 @@ pub enum DeleteRoleError {
 /// Both deletes share one transaction: a half-deleted role (permissions gone,
 /// row still present) would silently strip its holders' access instead of
 /// failing cleanly.
+///
+/// The existence and in-use checks below are still check-then-act — a
+/// concurrent `assign_member_role`/`add_member` can attach a member to this
+/// role after the in-use count reads zero but before `DELETE FROM roles`
+/// runs. That race is closed not by locking but by catching its actual
+/// failure mode: `org_members.role_id REFERENCES roles(id)` with no
+/// `ON DELETE CASCADE` means such a delete hits a foreign-key violation,
+/// which is mapped to `InUse` below rather than surfacing as a bare 500 —
+/// the same outcome a non-racing caller would have gotten.
 pub async fn delete_role(
     pool: &PgPool,
     org_id: Uuid,
     role_id: Uuid,
 ) -> Result<(), DeleteRoleError> {
+    let mut tx = pool.begin().await.map_err(DeleteRoleError::Db)?;
+
     // Verify the role exists *in this org* — a role id from another org is
     // NotFound, never InUse, so the outcome can't be used to probe for the
     // existence of roles in orgs the caller isn't a member of.
@@ -247,7 +271,7 @@ pub async fn delete_role(
         sqlx::query_as("SELECT id FROM roles WHERE id = $1 AND org_id = $2")
             .bind(role_id)
             .bind(org_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(DeleteRoleError::Db)?;
 
@@ -262,14 +286,13 @@ pub async fn delete_role(
         sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role_id = $2")
             .bind(org_id)
             .bind(role_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(DeleteRoleError::Db)?;
     if in_use > 0 {
         return Err(DeleteRoleError::InUse);
     }
 
-    let mut tx = pool.begin().await.map_err(DeleteRoleError::Db)?;
     sqlx::query("DELETE FROM role_permissions WHERE role_id = $1")
         .bind(role_id)
         .execute(&mut *tx)
@@ -279,8 +302,14 @@ pub async fn delete_role(
         .bind(role_id)
         .bind(org_id)
         .execute(&mut *tx)
-        .await
-        .map_err(DeleteRoleError::Db)?;
+        .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(e) if crate::org::admin::is_foreign_key_violation(&e) => {
+            return Err(DeleteRoleError::InUse);
+        }
+        Err(e) => return Err(DeleteRoleError::Db(e)),
+    };
     if result.rows_affected() == 0 {
         // Deleted by a concurrent caller between the check above and here.
         return Err(DeleteRoleError::NotFound);

@@ -19,9 +19,11 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --uid 10001 hivewarden
 
 COPY --from=builder /build/target/release/hivewarden /usr/local/bin/hivewarden
 
+USER hivewarden
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/hivewarden"]

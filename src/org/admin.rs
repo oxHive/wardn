@@ -69,6 +69,18 @@ pub(crate) fn is_unique_violation(err: &sqlx::Error) -> bool {
         .unwrap_or(false)
 }
 
+/// Widened the same way `is_unique_violation` is, for `roles::delete_role`
+/// and `org::members::add_member`: both have a check-then-act window where
+/// the referenced role can be deleted or referenced concurrently, and
+/// catching the resulting foreign-key violation turns what would otherwise
+/// be a bare 500 into the same outcome a non-racing caller would have seen
+/// (`Conflict`/`NotFound`).
+pub(crate) fn is_foreign_key_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .map(|e| e.is_foreign_key_violation())
+        .unwrap_or(false)
+}
+
 #[tracing::instrument(skip(state, req))]
 pub async fn create_role(
     State(state): State<AppState>,

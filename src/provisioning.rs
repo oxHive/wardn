@@ -191,6 +191,11 @@ const WORKER_BATCH_SIZE: i64 = 20;
 /// cycle than production's.
 pub async fn run_worker(pool: PgPool, sqld_admin_url: String, interval: Duration) {
     let mut ticker = tokio::time::interval(interval);
+    // Same reasoning as `observability::sqld_health_check_loop`: a slow tick
+    // (e.g. a batch of 20 slow admin-API calls) should not make the next
+    // tick fire immediately to "catch up" — that would just pile more work
+    // onto an already-slow sqld.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
         let tick_start = Instant::now();
