@@ -57,6 +57,12 @@ pub struct AppState {
     /// which is exactly the kind of security-relevant omission that should
     /// be a compile error, not a runtime footgun.
     pub api_key_pepper: String,
+    /// Origins a browser-based client (the `console` app) is allowed to call
+    /// this API from cross-origin. Defaults to the local `console` dev
+    /// server via `new` — set to the real deployed origin(s) with
+    /// `with_cors_origins`, same pattern as `with_sqld_admin_url`. See
+    /// `app()` in `lib.rs`, which builds the actual `CorsLayer` from this.
+    pub cors_origins: Vec<String>,
 }
 
 impl AppState {
@@ -70,6 +76,7 @@ impl AppState {
             metrics_handle,
             metrics_token: String::new(),
             api_key_pepper,
+            cors_origins: vec!["http://localhost:5173".to_string()],
         }
     }
 
@@ -85,6 +92,11 @@ impl AppState {
 
     pub fn with_metrics_token(mut self, metrics_token: String) -> Self {
         self.metrics_token = metrics_token;
+        self
+    }
+
+    pub fn with_cors_origins(mut self, cors_origins: Vec<String>) -> Self {
+        self.cors_origins = cors_origins;
         self
     }
 }

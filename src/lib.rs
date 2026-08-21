@@ -23,6 +23,7 @@ use std::time::Duration;
 use tower_governor::{
     GovernorError, GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor,
 };
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -124,6 +125,22 @@ pub fn app(state: AppState) -> Router {
 
     let registration_limiter = GovernorLayer::new(registration_governor_config);
 
+    let cors_origins: Vec<axum::http::HeaderValue> = state
+        .cors_origins
+        .iter()
+        .filter_map(|origin| axum::http::HeaderValue::from_str(origin).ok())
+        .collect();
+    let cors_layer = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(cors_origins))
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE]);
+
     Router::new()
         .route(
             "/api-keys",
@@ -175,5 +192,6 @@ pub fn app(state: AppState) -> Router {
                 // INFO gives every request exactly one such line for free.
                 .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
         )
+        .layer(cors_layer)
         .with_state(state)
 }
