@@ -1,5 +1,5 @@
-use hivewarden::db;
-use hivewarden::provisioning::{self, OutboxRow};
+use wardn::db;
+use wardn::provisioning::{self, OutboxRow};
 use uuid::Uuid;
 
 mod common;

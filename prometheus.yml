@@ -2,10 +2,10 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: hivewarden
+  - job_name: wardn
     authorization:
       # Local-dev-only placeholder — do not reuse this value for a real
       # deployment. Set the gateway's actual METRICS_TOKEN here instead.
       credentials: dev-metrics-token
     static_configs:
-      - targets: ["hivewarden:8787"]
+      - targets: ["wardn:8787"]

@@ -1,4 +1,4 @@
-# hivewarden Security Hardening Implementation Plan
+# wardn Security Hardening Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -377,7 +377,7 @@ pub const TEST_API_KEY_PEPPER: &str = "test-api-key-pepper-do-not-use-in-prod";
 Two mechanical, compiler-enforced changes apply across every test file below:
 
 1. **Every `AppState::new(pool, sqld_url)` call becomes `AppState::new(pool, sqld_url, common::TEST_API_KEY_PEPPER.to_string())`** (or the equivalent with whatever variable names that call site already uses for `pool`/`sqld_url` — only the third argument is new). Find every call site with `grep -rn "AppState::new" tests/`.
-2. **Every `auth::generate_api_key()` (or `hivewarden::auth::generate_api_key()`) call becomes `auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes())`** (fully-qualified call sites keep their full path, just add the argument). Find every call site with `grep -rn "generate_api_key()" tests/`.
+2. **Every `auth::generate_api_key()` (or `wardn::auth::generate_api_key()`) call becomes `auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes())`** (fully-qualified call sites keep their full path, just add the argument). Find every call site with `grep -rn "generate_api_key()" tests/`.
 
 If a test file doesn't already have `mod common;` at its top, add it — every file below needs `common::TEST_API_KEY_PEPPER`.
 
@@ -596,7 +596,7 @@ Append to `tests/registration_test.rs`:
 #[tokio::test]
 async fn create_user_rejects_invalid_email() {
     let pool = test_pool().await;
-    let app = hivewarden::app(test_state(pool));
+    let app = wardn::app(test_state(pool));
 
     for bad_email in ["", "not-an-email", "@example.com", "foo@", "foo@@example.com"] {
         let resp = app
@@ -622,7 +622,7 @@ async fn create_user_rejects_invalid_email() {
 #[tokio::test]
 async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates() {
     let pool = test_pool().await;
-    let app = hivewarden::app(test_state(pool));
+    let app = wardn::app(test_state(pool));
     let email = format!("MixedCase-{}@Example.com", Uuid::new_v4());
 
     let resp = app
@@ -764,7 +764,7 @@ async fn post_users_rate_limits_by_ip() {
     let pool = test_pool().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(test_state(pool))
+    let app = wardn::app(test_state(pool))
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -873,7 +873,7 @@ If `GovernorConfigBuilder::default()` (with no explicit `IpKeyExtractor` configu
 
 ```rust
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivewarden listening on {}", config.listen_addr);
+    tracing::info!("wardn listening on {}", config.listen_addr);
     axum::serve(
         listener,
         app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -895,7 +895,7 @@ Append to `tests/registration_test.rs`:
 #[tokio::test]
 async fn create_org_is_capped_per_user() {
     let pool = test_pool().await;
-    let app = hivewarden::app(test_state(pool));
+    let app = wardn::app(test_state(pool));
     let (_user_id, api_key) =
         register(app.clone(), &format!("orgquota-{}@example.com", Uuid::new_v4())).await;
 
@@ -1571,7 +1571,7 @@ async fn update_role_refuses_to_strip_the_last_manage_roles_holder() {
     .await;
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
-    let app = hivewarden::app(test_state(pool));
+    let app = wardn::app(test_state(pool));
     let resp = app
         .oneshot(
             Request::builder()
@@ -1605,7 +1605,7 @@ async fn remove_member_refuses_to_remove_the_last_manage_roles_holder() {
     )
     .await;
 
-    let app = hivewarden::app(test_state(pool));
+    let app = wardn::app(test_state(pool));
     let resp = app
         .oneshot(
             Request::builder()
@@ -1988,7 +1988,7 @@ async fn metrics_endpoint_rejects_a_token_of_different_length() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle)
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     // Neither a prefix nor a suffix of the real token — proves the check
     // isn't accidentally doing a substring/prefix match, just confirms

@@ -733,43 +733,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hivewarden"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "bytes",
- "chrono",
- "hex",
- "hmac",
- "http-body-util",
- "hyper",
- "hyper-util",
- "metrics",
- "metrics-exporter-prometheus",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "rand 0.8.7",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tower_governor",
- "tracing",
- "tracing-loki",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3044,6 +3007,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
 dependencies = [
  "try-lock",
+]
+
+[[package]]
+name = "wardn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "bytes",
+ "chrono",
+ "hex",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand 0.8.7",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tower_governor",
+ "tracing",
+ "tracing-loki",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

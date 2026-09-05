@@ -1,6 +1,6 @@
-# hivewarden Usage Metering — Design
+# wardn Usage Metering — Design
 
-**Status:** Approved. Fifth sub-project of `hivewarden`, built on the walking skeleton, org roles, database provisioning, and org membership/API keys.
+**Status:** Approved. Fifth sub-project of `wardn`, built on the walking skeleton, org roles, database provisioning, and org membership/API keys.
 
 ## Goal
 

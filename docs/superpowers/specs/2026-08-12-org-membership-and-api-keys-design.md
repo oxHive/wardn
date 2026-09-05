@@ -1,6 +1,6 @@
-# hivewarden Org Membership Management + Self-Service API Keys — Design
+# wardn Org Membership Management + Self-Service API Keys — Design
 
-**Status:** Approved. Fourth sub-project of `hivewarden`, built on the walking skeleton, org roles, and database provisioning automation.
+**Status:** Approved. Fourth sub-project of `wardn`, built on the walking skeleton, org roles, and database provisioning automation.
 
 ## Goal
 

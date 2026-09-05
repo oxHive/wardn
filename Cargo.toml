@@ -1,14 +1,14 @@
 [package]
-name = "hivewarden"
+name = "wardn"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "hivewarden"
+name = "wardn"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hivewarden"
+name = "wardn"
 path = "src/main.rs"
 
 [dependencies]

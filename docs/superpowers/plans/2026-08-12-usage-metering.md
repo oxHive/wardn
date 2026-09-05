@@ -74,7 +74,7 @@ Run (from the repo root, with the dev Postgres/sqld up via `podman-compose up -d
 ```sh
 SQLD_ADMIN_URL=http://127.0.0.1:8090 cargo run
 ```
-Expected: the startup log line (`hivewarden listening on ...`) now prints as a single JSON object per line (e.g. `{"timestamp":"...","level":"INFO","fields":{"message":"hivewarden listening on 127.0.0.1:8787"},"target":"hivewarden"}`), not the previous human-readable format. Ctrl-C to stop.
+Expected: the startup log line (`wardn listening on ...`) now prints as a single JSON object per line (e.g. `{"timestamp":"...","level":"INFO","fields":{"message":"wardn listening on 127.0.0.1:8787"},"target":"wardn"}`), not the previous human-readable format. Ctrl-C to stop.
 
 - [ ] **Step 4: Commit**
 
@@ -106,8 +106,8 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use bytes::Bytes;
-use hivewarden::auth::AppState;
-use hivewarden::db;
+use wardn::auth::AppState;
+use wardn::db;
 use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -194,7 +194,7 @@ async fn create_org(app: axum::Router, owner_key: &str, name: &str) -> String {
 async fn successful_query_request_emits_a_usage_event() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
@@ -238,7 +238,7 @@ async fn successful_query_request_emits_a_usage_event() {
 async fn rejected_request_does_not_emit_a_usage_event() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (resp, events) = common::capture_usage_events(|| {
         app.oneshot(
@@ -263,7 +263,7 @@ async fn rejected_request_does_not_emit_a_usage_event() {
 async fn org_shared_request_emits_org_id_field() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", Uuid::new_v4())).await;
@@ -303,7 +303,7 @@ const EMPTY_GRPC_MESSAGE: [u8; 5] = [0, 0, 0, 0, 0];
 async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(
+    let app = wardn::app(
         AppState::new(pool, test_sqld_url()).with_sqld_admin_url(admin_url()),
     );
     tokio::spawn(async move {
@@ -356,7 +356,7 @@ async fn sync_request_emits_protocol_sync() {
     .execute(&pool)
     .await
     .unwrap();
-    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key();
+    let (full_key, prefix, hash) = wardn::auth::generate_api_key();
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",

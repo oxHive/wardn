@@ -1,4 +1,4 @@
-# hivewarden Observability Implementation Plan
+# wardn Observability Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -60,8 +60,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivewarden::auth::AppState;
-use hivewarden::db;
+use wardn::auth::AppState;
+use wardn::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -85,7 +85,7 @@ async fn metrics_endpoint_returns_prometheus_text_unauthenticated() {
     let state = AppState::new(pool, test_sqld_url())
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle);
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     // No Authorization header — proves this route sits outside auth_middleware.
     let resp = app
@@ -173,7 +173,7 @@ impl AppState {
 - [ ] **Step 6: Create `src/observability.rs`**
 
 ```rust
-//! Prometheus metrics for hivewarden. One global recorder for the
+//! Prometheus metrics for wardn. One global recorder for the
 //! whole process, installed once in `main.rs` — see `AppState::metrics_handle`
 //! for why every other call site builds a local, uninstalled handle instead.
 
@@ -479,7 +479,7 @@ At the success path, add the metrics call right after the existing `emit_usage_e
 
 - [ ] **Step 4: Write the failing tests**
 
-Append to `tests/observability_test.rs` (add `use hivewarden::auth::AppState;` etc. are already imported; add these new imports at the top of the file alongside the existing ones):
+Append to `tests/observability_test.rs` (add `use wardn::auth::AppState;` etc. are already imported; add these new imports at the top of the file alongside the existing ones):
 
 ```rust
 use axum::body::Body as _;
@@ -528,7 +528,7 @@ async fn successful_request_increments_counter_and_histogram() {
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle.clone());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
@@ -576,7 +576,7 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     let state = AppState::new(pool.clone(), test_sqld_url())
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle.clone());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("obs-{}@example.com", Uuid::new_v4())).await;
@@ -743,14 +743,14 @@ After the provisioning worker's `tokio::spawn` call, add:
     ));
 ```
 
-Add `observability` to the `use hivewarden::{...}` import list at the top of `main.rs`.
+Add `observability` to the `use wardn::{...}` import list at the top of `main.rs`.
 
 - [ ] **Step 4: Write the failing tests**
 
 Append to `tests/observability_test.rs`:
 
 ```rust
-use hivewarden::observability;
+use wardn::observability;
 use std::time::Duration;
 
 #[tokio::test]
@@ -761,7 +761,7 @@ async fn metrics_endpoint_reports_pg_pool_gauges() {
         .with_sqld_admin_url(admin_url())
         .with_metrics_handle(handle)
         .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let resp = app
         .oneshot(
@@ -1055,7 +1055,7 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: hivewarden
+  - job_name: wardn
     authorization:
       credentials: dev-metrics-token
     static_configs:
@@ -1132,7 +1132,7 @@ podman-compose -f podman-compose.yml up -d --build
 sleep 20
 curl -s http://127.0.0.1:9090/api/v1/targets | grep -o '"health":"[a-z]*"'
 ```
-Expected: at least one `"health":"up"` (the `hivewarden` job). If it prints `"health":"down"` instead, check `podman-compose logs gateway` and `podman-compose logs prometheus` before proceeding — a down target here means Task 1-4's `/metrics` route or this task's scrape config has a mismatch, not something to paper over.
+Expected: at least one `"health":"up"` (the `wardn` job). If it prints `"health":"down"` instead, check `podman-compose logs gateway` and `podman-compose logs prometheus` before proceeding — a down target here means Task 1-4's `/metrics` route or this task's scrape config has a mismatch, not something to paper over.
 
 Run: `curl -s http://127.0.0.1:3000/api/datasources` (anonymous viewer access, no auth header needed)
 Expected: JSON containing `"name":"Prometheus"` — proves the datasource provisioning file loaded.

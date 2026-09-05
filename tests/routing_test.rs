@@ -4,8 +4,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hivewarden::auth::{self, AppState, AuthedOwner};
-use hivewarden::{db, routing};
+use wardn::auth::{self, AppState, AuthedOwner};
+use wardn::{db, routing};
 use tower::ServiceExt;
 use uuid::Uuid;
 

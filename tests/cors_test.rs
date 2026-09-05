@@ -2,8 +2,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use hivewarden::AppState;
-use hivewarden::db;
+use wardn::AppState;
+use wardn::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -19,7 +19,7 @@ fn test_sqld_url() -> String {
 #[tokio::test]
 async fn allowed_origin_gets_the_cors_header() {
     let pool = test_pool().await;
-    let app = hivewarden::app(
+    let app = wardn::app(
         AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
             .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
@@ -43,7 +43,7 @@ async fn allowed_origin_gets_the_cors_header() {
 #[tokio::test]
 async fn disallowed_origin_gets_no_cors_header() {
     let pool = test_pool().await;
-    let app = hivewarden::app(
+    let app = wardn::app(
         AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
             .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
@@ -64,7 +64,7 @@ async fn disallowed_origin_gets_no_cors_header() {
 #[tokio::test]
 async fn request_with_no_origin_is_unaffected() {
     let pool = test_pool().await;
-    let app = hivewarden::app(AppState::new(
+    let app = wardn::app(AppState::new(
         pool,
         test_sqld_url(),
         common::TEST_API_KEY_PEPPER.to_string(),

@@ -1,6 +1,6 @@
-# hivewarden Security Hardening — Design
+# wardn Security Hardening — Design
 
-**Status:** Approved. Seventh sub-project of `hivewarden` (formerly `hivemind-gateway`), built on the walking skeleton, org roles, database provisioning, org membership/API keys, usage metering, and observability.
+**Status:** Approved. Seventh sub-project of `wardn` (formerly `hivemind-gateway`), built on the walking skeleton, org roles, database provisioning, org membership/API keys, usage metering, and observability.
 
 ## Goal
 

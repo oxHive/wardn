@@ -12,7 +12,7 @@ COPY src ./src
 
 # sqlx::migrate!("./migrations") embeds the migration SQL into the binary
 # at compile time — migrations/ must exist here, but not in the runtime image.
-RUN cargo build --release --bin hivewarden
+RUN cargo build --release --bin wardn
 
 # Runtime
 FROM debian:bookworm-slim
@@ -20,10 +20,10 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --no-create-home --uid 10001 hivewarden
+    && useradd --system --no-create-home --uid 10001 wardn
 
-COPY --from=builder /build/target/release/hivewarden /usr/local/bin/hivewarden
+COPY --from=builder /build/target/release/wardn /usr/local/bin/wardn
 
-USER hivewarden
+USER wardn
 EXPOSE 8787
-ENTRYPOINT ["/usr/local/bin/hivewarden"]
+ENTRYPOINT ["/usr/local/bin/wardn"]

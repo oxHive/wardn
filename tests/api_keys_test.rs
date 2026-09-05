@@ -2,8 +2,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivewarden::auth::AppState;
-use hivewarden::db;
+use wardn::auth::AppState;
+use wardn::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -53,7 +53,7 @@ async fn register(app: axum::Router, email: &str) -> (uuid::Uuid, String) {
 async fn list_keys_shows_the_registration_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, api_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -85,7 +85,7 @@ async fn list_keys_shows_the_registration_key() {
 async fn create_key_mints_an_independent_second_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, first_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -153,7 +153,7 @@ async fn create_key_mints_an_independent_second_key() {
 async fn revoke_key_stops_only_that_key_from_authenticating() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_id, first_key) =
         register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -247,7 +247,7 @@ async fn revoke_key_stops_only_that_key_from_authenticating() {
 async fn revoke_key_returns_404_for_someone_elses_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (user_a_id, key_a) =
         register(app.clone(), &format!("keys-a-{}@example.com", uuid::Uuid::new_v4())).await;

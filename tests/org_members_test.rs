@@ -2,8 +2,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivewarden::auth::AppState;
-use hivewarden::db;
+use wardn::auth::AppState;
+use wardn::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -87,7 +87,7 @@ async fn bootstrap_role_id(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> uuid::Uui
 async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -171,7 +171,7 @@ async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
 async fn list_members_shows_the_owner_and_the_invited_member() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let owner_email = format!("owner-{}@example.com", uuid::Uuid::new_v4());
     let (owner_id, owner_key) = register(app.clone(), &owner_email).await;
@@ -239,7 +239,7 @@ async fn list_members_shows_the_owner_and_the_invited_member() {
 async fn list_members_rejects_a_caller_without_permission() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -269,7 +269,7 @@ async fn list_members_rejects_a_caller_without_permission() {
 async fn add_member_accepts_a_differently_cased_email() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -336,7 +336,7 @@ async fn add_member_accepts_a_differently_cased_email() {
 async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -505,7 +505,7 @@ async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
 async fn add_member_rejects_an_unregistered_email() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -537,7 +537,7 @@ async fn add_member_rejects_an_unregistered_email() {
 async fn add_member_rejects_a_duplicate_invite() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -586,7 +586,7 @@ async fn add_member_rejects_a_duplicate_invite() {
 async fn remove_member_revokes_org_access_but_not_the_personal_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
@@ -676,7 +676,7 @@ async fn remove_member_revokes_org_access_but_not_the_personal_key() {
 async fn remove_member_returns_404_for_a_non_member() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_owner_id, owner_key) =
         register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give hivewarden distributed tracing (HTTP → DB → sqld proxy spans, exported via OTLP through an OTel Collector into Tempo) and searchable, trace-correlated logs (pushed to Loki), both browsable in Grafana.
+**Goal:** Give wardn distributed tracing (HTTP → DB → sqld proxy spans, exported via OTLP through an OTel Collector into Tempo) and searchable, trace-correlated logs (pushed to Loki), both browsable in Grafana.
 
-**Architecture:** `hivewarden` gains a layered `tracing_subscriber` stack — the existing stdout JSON layer, plus two new optional layers (OTel export, Loki push) that no-op when their env vars are unset. `tower-http`'s `TraceLayer` creates one span per HTTP request and stamps a `trace_id` field onto it (read back from the OTel context via `tracing-opentelemetry`'s public `OpenTelemetrySpanExt`), so every JSON log line emitted during that request carries `trace_id` — Loki's derived fields turn that into a clickable jump into the matching Tempo trace. New compose services (`loki`, `tempo`, `otel-collector`) and Grafana datasources wire it all up for local dev.
+**Architecture:** `wardn` gains a layered `tracing_subscriber` stack — the existing stdout JSON layer, plus two new optional layers (OTel export, Loki push) that no-op when their env vars are unset. `tower-http`'s `TraceLayer` creates one span per HTTP request and stamps a `trace_id` field onto it (read back from the OTel context via `tracing-opentelemetry`'s public `OpenTelemetrySpanExt`), so every JSON log line emitted during that request carries `trace_id` — Loki's derived fields turn that into a clickable jump into the matching Tempo trace. New compose services (`loki`, `tempo`, `otel-collector`) and Grafana datasources wire it all up for local dev.
 
 **Tech Stack:** `opentelemetry` / `opentelemetry_sdk` / `opentelemetry-otlp` (OTLP/gRPC/tonic exporter), `tracing-opentelemetry` (bridges `tracing` spans to OTel), `tower-http` (`trace` feature, HTTP-layer spans), `tracing-loki` (Loki push layer), Grafana Loki + Tempo + `otel/opentelemetry-collector-contrib`.
 
@@ -35,7 +35,7 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: hivewarden
+  - job_name: wardn
     authorization:
       # Local-dev-only placeholder — do not reuse this value for a real
       # deployment. Set the gateway's actual METRICS_TOKEN here instead.
@@ -44,11 +44,11 @@ scrape_configs:
       - targets: ["gateway:8787"]
 ```
 
-Change the `targets` line — `gateway` was the compose service's old name before it was renamed to `hivewarden`:
+Change the `targets` line — `gateway` was the compose service's old name before it was renamed to `wardn`:
 
 ```yaml
     static_configs:
-      - targets: ["hivewarden:8787"]
+      - targets: ["wardn:8787"]
 ```
 
 - [ ] **Step 2: Verify the target comes up healthy**
@@ -65,9 +65,9 @@ Expected: `"health":"up"` (previously `"health":"down"` with `lastError` about c
 
 ```bash
 git add prometheus.yml
-git commit -m "fix: point prometheus at the renamed hivewarden compose service
+git commit -m "fix: point prometheus at the renamed wardn compose service
 
-The gateway->hivewarden compose service rename left prometheus.yml
+The gateway->wardn compose service rename left prometheus.yml
 scraping a hostname that no longer resolves, silently taking the
 metrics target down."
 ```
@@ -82,7 +82,7 @@ metrics target down."
 - Modify: `podman-compose.yml`
 
 **Interfaces:**
-- Produces: compose services reachable from other containers as `http://loki:3100`, `http://tempo:3200` (query) / `tempo:4317` (OTLP, collector-only), `http://otel-collector:4317` (OTLP gRPC, what `hivewarden` will point at in Task 6).
+- Produces: compose services reachable from other containers as `http://loki:3100`, `http://tempo:3200` (query) / `tempo:4317` (OTLP, collector-only), `http://otel-collector:4317` (OTLP gRPC, what `wardn` will point at in Task 6).
 
 - [ ] **Step 1: Write the Tempo config**
 
@@ -138,12 +138,12 @@ service:
 
 - [ ] **Step 3: Add the three services to podman-compose.yml**
 
-In `podman-compose.yml`, after the `sqld` service block and before `hivewarden`, insert:
+In `podman-compose.yml`, after the `sqld` service block and before `wardn`, insert:
 
 ```yaml
   loki:
     image: docker.io/grafana/loki:latest
-    # No host-published port: only hivewarden (log push) and grafana
+    # No host-published port: only wardn (log push) and grafana
     # (query) need to reach it, both over the compose network.
 
   tempo:
@@ -161,13 +161,13 @@ In `podman-compose.yml`, after the `sqld` service block and before `hivewarden`,
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro,Z
     depends_on:
       - tempo
-    # No host-published port: only hivewarden needs to reach it, over the
+    # No host-published port: only wardn needs to reach it, over the
     # compose network.
 ```
 
-- [ ] **Step 4: Point hivewarden at the collector and Loki**
+- [ ] **Step 4: Point wardn at the collector and Loki**
 
-In the `hivewarden` service's `environment` block, add two new lines after `API_KEY_PEPPER`:
+In the `wardn` service's `environment` block, add two new lines after `API_KEY_PEPPER`:
 
 ```yaml
       API_KEY_PEPPER: dev-api-key-pepper-do-not-use-in-prod-min-32-chars
@@ -190,9 +190,9 @@ And add `otel-collector` and `loki` to its `depends_on` list:
 ```bash
 podman-compose -f podman-compose.yml up -d loki tempo otel-collector
 sleep 10
-podman exec hivewarden_loki_1 wget -qO- http://127.0.0.1:3100/ready
-podman exec hivewarden_tempo_1 wget -qO- http://127.0.0.1:3200/ready
-podman logs hivewarden_otel-collector_1 --tail 20
+podman exec wardn_loki_1 wget -qO- http://127.0.0.1:3100/ready
+podman exec wardn_tempo_1 wget -qO- http://127.0.0.1:3200/ready
+podman logs wardn_otel-collector_1 --tail 20
 ```
 
 Expected: Loki prints `ready`, Tempo returns 200 (empty body is fine), and the collector's log shows it started its `traces` pipeline without an error.
@@ -203,7 +203,7 @@ Expected: Loki prints `ready`, Tempo returns 200 (empty body is fine), and the c
 git add tempo.yaml otel-collector-config.yaml podman-compose.yml
 git commit -m "feat: add Loki, Tempo, and an OTel Collector to the local dev stack
 
-Internal-only services (no host-published ports) — hivewarden will
+Internal-only services (no host-published ports) — wardn will
 push traces to the collector and logs to Loki once instrumented."
 ```
 
@@ -237,7 +237,7 @@ datasources:
         spanEndTimeShift: '1h'
         filterByTraceID: true
         customQuery: true
-        query: '{service_name="hivewarden"} |= "$${__span.traceId}"'
+        query: '{service_name="wardn"} |= "$${__span.traceId}"'
 ```
 
 - [ ] **Step 2: Add the Loki datasource, with a derived field back to Tempo**
@@ -344,7 +344,7 @@ Append to `.env.example`:
 # Optional. OTLP/gRPC endpoint traces are exported to. Unset means tracing
 # spans are still created (and logged) but never exported anywhere — useful
 # for `cargo run`/`cargo test` outside podman-compose, where no collector is
-# running. Inside podman-compose, the hivewarden service sets this itself.
+# running. Inside podman-compose, the wardn service sets this itself.
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
 # Optional. Base URL of a Loki instance to push logs to. Unset means logs
 # stay stdout-only, exactly like without this variable at all.
@@ -409,7 +409,7 @@ use opentelemetry_otlp::WithExportConfig;
 
 /// Builds an OTLP/gRPC (tonic) span exporter pointed at `otlp_endpoint`,
 /// wraps it in a batching `SdkTracerProvider` tagged with `service.name =
-/// hivewarden`, registers that provider as the process-global OTel tracer
+/// wardn`, registers that provider as the process-global OTel tracer
 /// provider, and returns a `Tracer` from it — ready to hand to
 /// `tracing_opentelemetry::layer().with_tracer(...)` in `main.rs`.
 pub fn init_tracer(otlp_endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::Tracer> {
@@ -419,18 +419,18 @@ pub fn init_tracer(otlp_endpoint: &str) -> anyhow::Result<opentelemetry_sdk::tra
         .build()
         .context("failed to build OTLP span exporter")?;
     let resource = opentelemetry_sdk::Resource::builder()
-        .with_service_name("hivewarden")
+        .with_service_name("wardn")
         .build();
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_resource(resource)
         .with_batch_exporter(exporter)
         .build();
     opentelemetry::global::set_tracer_provider(provider.clone());
-    Ok(provider.tracer("hivewarden"))
+    Ok(provider.tracer("wardn"))
 }
 
 /// Builds a `tracing-loki` layer pushing to `loki_url`, labeled
-/// `service_name=hivewarden` — matching the `service_name` label the Tempo
+/// `service_name=wardn` — matching the `service_name` label the Tempo
 /// datasource's `tracesToLogsV2` query filters on
 /// (`grafana/provisioning/datasources/tempo.yml`), so both point at the
 /// same log stream. Returns the layer plus its background delivery task,
@@ -441,7 +441,7 @@ pub fn init_loki_layer(
 ) -> anyhow::Result<(tracing_loki::Layer, tracing_loki::BackgroundTask)> {
     let url = url::Url::parse(loki_url).context("invalid LOKI_URL")?;
     let (layer, task) = tracing_loki::builder()
-        .label("service_name", "hivewarden")
+        .label("service_name", "wardn")
         .context("invalid tracing-loki label")?
         .build_url(url)
         .context("failed to build tracing-loki layer")?;
@@ -496,7 +496,7 @@ without touching this file again."
 ```rust
 use std::time::Duration;
 
-use hivewarden::{AppState, app, config::Config, db, observability, provisioning};
+use wardn::{AppState, app, config::Config, db, observability, provisioning};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::EnvFilter;
 ```
@@ -522,7 +522,7 @@ Replace the imports with:
 ```rust
 use std::time::Duration;
 
-use hivewarden::{AppState, app, config::Config, db, observability, provisioning, telemetry};
+use wardn::{AppState, app, config::Config, db, observability, provisioning, telemetry};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -590,7 +590,7 @@ LISTEN_ADDR=127.0.0.1:18787 \
 timeout 3 cargo run || true
 ```
 
-Expected: builds cleanly, and the timed-out run's output shows the normal `"hivewarden listening on 127.0.0.1:18787"` JSON log line with no OTel/Loki-related errors (neither env var was set, so both layers are `None`).
+Expected: builds cleanly, and the timed-out run's output shows the normal `"wardn listening on 127.0.0.1:18787"` JSON log line with no OTel/Loki-related errors (neither env var was set, so both layers are `None`).
 
 - [ ] **Step 4: Commit**
 
@@ -1040,14 +1040,14 @@ sleep 5
 curl -s "http://127.0.0.1:3200/api/search?tags=&limit=5" | head -c 500
 ```
 
-(There is no host-published Tempo port per this plan's design, so run this `curl` from inside the compose network instead if the host can't reach it directly: `podman exec hivewarden_otel-collector_1 wget -qO- "http://tempo:3200/api/search?tags=&limit=5"`.)
+(There is no host-published Tempo port per this plan's design, so run this `curl` from inside the compose network instead if the host can't reach it directly: `podman exec wardn_otel-collector_1 wget -qO- "http://tempo:3200/api/search?tags=&limit=5"`.)
 
 Expected: a non-empty `traces` array, including a trace named `http_request` for the `POST /users` and `GET /api-keys` calls just made.
 
 - [ ] **Step 5: Confirm logs landed in Loki with a `trace_id` field**
 
 ```bash
-podman exec hivewarden_loki_1 wget -qO- 'http://127.0.0.1:3100/loki/api/v1/query_range?query={service_name="hivewarden"}&limit=5'
+podman exec wardn_loki_1 wget -qO- 'http://127.0.0.1:3100/loki/api/v1/query_range?query={service_name="wardn"}&limit=5'
 ```
 
 Expected: a non-empty `result` array; at least one log line's JSON payload contains a `"trace_id"` field with a non-zero 32-hex-character value.

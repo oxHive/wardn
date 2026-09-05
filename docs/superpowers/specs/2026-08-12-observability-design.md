@@ -1,6 +1,6 @@
-# hivewarden Observability — Design
+# wardn Observability — Design
 
-**Status:** Approved. Sixth sub-project of `hivewarden`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, and usage metering.
+**Status:** Approved. Sixth sub-project of `wardn`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, and usage metering.
 
 ## Goal
 

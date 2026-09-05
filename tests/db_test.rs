@@ -1,4 +1,4 @@
-use hivewarden::db;
+use wardn::db;
 use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {

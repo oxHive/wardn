@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use hivewarden::{AppState, app, config::Config, db, observability, provisioning, telemetry};
+use wardn::{AppState, app, config::Config, db, observability, provisioning, telemetry};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         .with_metrics_token(config.metrics_token.clone())
         .with_cors_origins(config.console_origins.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivewarden listening on {}", config.listen_addr);
+    tracing::info!("wardn listening on {}", config.listen_addr);
     axum::serve(
         listener,
         app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),

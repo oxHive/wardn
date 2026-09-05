@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivewarden::auth::AppState;
-use hivewarden::db;
+use wardn::auth::AppState;
+use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ async fn register(app: axum::Router, email: &str) -> (Uuid, String) {
 async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let email = format!("register-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -82,7 +82,7 @@ async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let user_id = created["user_id"].as_str().unwrap().to_string();
     let api_key = created["api_key"].as_str().unwrap();
-    assert!(api_key.starts_with(hivewarden::auth::KEY_MARKER));
+    assert!(api_key.starts_with(wardn::auth::KEY_MARKER));
 
     // Prove the namespace was actually provisioned: write through it, read
     // it back, via the real router, exactly the way a real client would.
@@ -146,7 +146,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     // fail without failing the request itself.
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
         .with_sqld_admin_url("http://127.0.0.1:1".to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let email = format!("register-fail-{}@example.com", uuid::Uuid::new_v4());
     let resp = app
@@ -187,7 +187,7 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
 async fn create_user_with_an_already_registered_email_returns_409() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let email = format!("dupe-{}@example.com", uuid::Uuid::new_v4());
     let register = || {
@@ -251,7 +251,7 @@ async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {
 async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     let (_user_id, api_key) = seed_registered_user(app.clone()).await;
 
@@ -335,7 +335,7 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
 async fn create_user_rejects_invalid_email() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     for bad_email in ["", "not-an-email", "@example.com", "foo@", "foo@@example.com"] {
         let resp = app
@@ -362,7 +362,7 @@ async fn create_user_rejects_invalid_email() {
 async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
     let email = format!("MixedCase-{}@Example.com", uuid::Uuid::new_v4());
 
     let resp = app
@@ -401,7 +401,7 @@ async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates()
 async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     let pool = test_pool().await;
     let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     // A workspace-owned key: real row, valid hash, but owner_type != "user".
     let workspace_id = uuid::Uuid::new_v4();
@@ -418,7 +418,7 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = hivewarden::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
+    let (full_key, prefix, hash) = wardn::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'workspace', $3, $4, $5)",
@@ -483,7 +483,7 @@ async fn post_users_rate_limits_by_ip() {
     let _lock = common::lock_outbox(&pool).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = hivewarden::app(test_state(pool.clone()))
+    let app = wardn::app(test_state(pool.clone()))
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -536,7 +536,7 @@ async fn post_users_rate_limits_by_ip() {
 async fn create_org_is_capped_per_user() {
     let pool = test_pool().await;
     let _lock = common::lock_outbox(&pool).await;
-    let app = hivewarden::app(test_state(pool.clone()));
+    let app = wardn::app(test_state(pool.clone()));
     let (user_id, api_key) =
         register(app.clone(), &format!("orgquota-{}@example.com", Uuid::new_v4())).await;
 
@@ -603,7 +603,7 @@ async fn create_org_is_capped_per_user() {
 async fn org_membership_via_an_owner_named_role_does_not_count_against_the_quota() {
     let pool = test_pool().await;
     let _lock = common::lock_outbox(&pool).await;
-    let app = hivewarden::app(test_state(pool.clone()));
+    let app = wardn::app(test_state(pool.clone()));
 
     // The "victim": a plain registered user who never creates anything.
     let (victim_id, victim_key) =

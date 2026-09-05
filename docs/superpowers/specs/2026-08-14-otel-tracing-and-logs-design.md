@@ -1,6 +1,6 @@
-# hivewarden OTel Tracing and Log Aggregation — Design
+# wardn OTel Tracing and Log Aggregation — Design
 
-**Status:** Approved. Seventh sub-project of `hivewarden`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, usage metering, and observability (metrics).
+**Status:** Approved. Seventh sub-project of `wardn`, built on the walking skeleton, org roles, database provisioning, org membership/API keys, usage metering, and observability (metrics).
 
 ## Goal
 
@@ -21,7 +21,7 @@ The metrics slice (`docs/superpowers/specs/2026-08-12-observability-design.md`) 
 - **Log/trace correlation via a `trace_id` field on JSON log lines, not the OTel logs bridge (`opentelemetry-appender-tracing`).** That bridge is the least mature part of the Rust OTel ecosystem. Instead, a small custom `tracing_subscriber::Layer` reads the current span's OTel `trace_id` (via `tracing-opentelemetry`'s span extension / `OpenTelemetrySpanExt`) and records it as a `trace_id` field, which both the stdout JSON layer and the `tracing-loki` layer pick up like any other field. Loki's "derived fields" then turn that `trace_id` value into a link straight into the matching Tempo trace.
 - **Instrumentation depth: HTTP + DB + sqld proxy calls.** `tower-http`'s `TraceLayer` for one span per request; `#[tracing::instrument]` on the DB-access functions; a child span around `proxy_handler`'s outbound call to sqld. Together these make a slow-request trace show, at a glance, whether time was spent in Postgres, in sqld, or in the gateway itself.
 - **`OTEL_EXPORTER_OTLP_ENDPOINT` and `LOKI_URL` are both optional `Config` fields**, unlike `API_KEY_PEPPER`/`METRICS_TOKEN`. If unset, the app runs exactly as it does today — no forced collector/Loki dependency for `cargo test` or a bare `cargo run` outside podman-compose. `OTEL_EXPORTER_OTLP_ENDPOINT` reuses the OTel SDK's own standard env var name rather than inventing a gateway-specific one, since that's what `opentelemetry-otlp`'s exporter builder already reads by convention.
-- **Drive-by fix: `prometheus.yml` still scrapes `gateway:8787`**, the pre-rename service hostname (the `gateway` → `hivewarden` compose service rename predates this slice). Prometheus's target has been silently down since that rename. Fixed here since this slice is already touching the compose file and every other observability config in it.
+- **Drive-by fix: `prometheus.yml` still scrapes `gateway:8787`**, the pre-rename service hostname (the `gateway` → `wardn` compose service rename predates this slice). Prometheus's target has been silently down since that rename. Fixed here since this slice is already touching the compose file and every other observability config in it.
 
 **Explicitly out of scope for this slice:**
 - Sampling / trace retention policy tuning — Tempo runs with its defaults; a production deployment would need this, a dev stack does not.
@@ -35,11 +35,11 @@ The metrics slice (`docs/superpowers/specs/2026-08-12-observability-design.md`) 
 
 Three new services, all internal-only (no host-published ports) — nothing outside the compose network needs to reach them directly; humans browse traces/logs through Grafana, not by hitting Loki/Tempo/the collector on the host:
 
-- **`loki`** (`docker.io/grafana/loki:latest`) — log storage + query API. `hivewarden` and Grafana both reach it by service name (`http://loki:3100`).
+- **`loki`** (`docker.io/grafana/loki:latest`) — log storage + query API. `wardn` and Grafana both reach it by service name (`http://loki:3100`).
 - **`tempo`** (`docker.io/grafana/tempo:latest`) — trace storage + query API, OTLP receiver on its internal gRPC/HTTP ports. Only the collector talks to it directly.
-- **`otel-collector`** (`docker.io/otel/opentelemetry-collector-contrib:latest`) — receives OTLP (gRPC) from `hivewarden`, exports OTLP to `tempo`. Config is a minimal receiver→exporter pipeline, no processors beyond the defaults.
+- **`otel-collector`** (`docker.io/otel/opentelemetry-collector-contrib:latest`) — receives OTLP (gRPC) from `wardn`, exports OTLP to `tempo`. Config is a minimal receiver→exporter pipeline, no processors beyond the defaults.
 
-`hivewarden`'s environment block gains:
+`wardn`'s environment block gains:
 ```
 OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
 LOKI_URL: http://loki:3100
@@ -75,7 +75,7 @@ Layers 3 and 4 are conditionally added (`Option<Layer>` composed via `.with(...)
 ### Data flow
 
 ```
-hivewarden (per request)
+wardn (per request)
   ├─ tower-http TraceLayer span (HTTP)
   │    ├─ #[instrument] DB span(s) (auth lookup, namespace lookup, ...)
   │    └─ #[instrument] sqld proxy span (outbound call)
@@ -90,7 +90,7 @@ Grafana Explore
 
 ### Drive-by fix
 
-`prometheus.yml`'s `static_configs` target changes from `gateway:8787` to `hivewarden:8787`, matching the compose service's actual name.
+`prometheus.yml`'s `static_configs` target changes from `gateway:8787` to `wardn:8787`, matching the compose service's actual name.
 
 ## Testing
 

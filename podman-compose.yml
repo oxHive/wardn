@@ -29,7 +29,7 @@ services:
 
   loki:
     image: docker.io/grafana/loki:latest
-    # No host-published port: only hivewarden (log push) and grafana
+    # No host-published port: only wardn (log push) and grafana
     # (query) need to reach it, both over the compose network.
 
   tempo:
@@ -47,10 +47,10 @@ services:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro,Z
     depends_on:
       - tempo
-    # No host-published port: only hivewarden needs to reach it, over the
+    # No host-published port: only wardn needs to reach it, over the
     # compose network.
 
-  hivewarden:
+  wardn:
     build:
       context: .
       dockerfile: Dockerfile
@@ -87,7 +87,7 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
-      - hivewarden
+      - wardn
 
   grafana:
     image: docker.io/grafana/grafana:latest

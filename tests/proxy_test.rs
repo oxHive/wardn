@@ -3,8 +3,8 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine as _;
-use hivewarden::auth::{self, AppState};
-use hivewarden::db;
+use wardn::auth::{self, AppState};
+use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -147,7 +147,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
     .unwrap();
 
     let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     // sqld exposes a version endpoint at GET /version on its default HTTP
     // listener — proxying it through confirms the request actually reached
@@ -199,7 +199,7 @@ async fn namespace_isolation_through_full_router() {
     let secret_a = format!("A-secret-{owner_a_id}");
     let secret_b = format!("B-secret-{owner_b_id}");
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     // Owner A creates their table and writes their secret.
     let create_and_insert_a = format!(
@@ -299,7 +299,7 @@ async fn client_cannot_smuggle_a_namespace_selector() {
     let victim_key = seed_owner_with_namespace(&pool, &victim_ns).await;
 
     let victim_secret = format!("VICTIM-{victim_id}");
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
 
     let (status, _) = query_through_gateway(
         app.clone(),
@@ -335,7 +335,7 @@ async fn client_cannot_smuggle_a_namespace_selector() {
 #[tokio::test]
 async fn missing_key_never_reaches_sqld() {
     let pool = test_pool().await;
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let resp = app
         .oneshot(
             Request::builder()
@@ -371,7 +371,7 @@ async fn valid_key_with_no_mapping_returns_404() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
     let resp = app
         .oneshot(
             Request::builder()

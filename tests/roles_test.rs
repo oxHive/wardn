@@ -1,6 +1,6 @@
-use hivewarden::auth::AuthedOwner;
-use hivewarden::db;
-use hivewarden::roles::{self, Permission};
+use wardn::auth::AuthedOwner;
+use wardn::db;
+use wardn::roles::{self, Permission};
 use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {

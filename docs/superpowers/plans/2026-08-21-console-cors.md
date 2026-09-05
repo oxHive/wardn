@@ -1,14 +1,14 @@
-# hivewarden CORS Support Implementation Plan
+# wardn CORS Support Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a browser-based client (the `console` app) call hivewarden's API cross-origin, which is blocked outright today — hivewarden has no CORS layer at all.
+**Goal:** Let a browser-based client (the `console` app) call wardn's API cross-origin, which is blocked outright today — wardn has no CORS layer at all.
 
 **Architecture:** A `tower_http::cors::CorsLayer`, added as the outermost layer in `app()` (`src/lib.rs`) so a CORS preflight is answered before it ever reaches `auth_middleware`. Allowed origins are carried on `AppState` (new `cors_origins: Vec<String>` field, set via a builder method matching the existing `with_sqld_admin_url`/`with_metrics_token` pattern) and sourced from a new `CONSOLE_ORIGINS` env var, comma-separated, defaulting to `http://localhost:5173` when unset.
 
-**Tech Stack:** axum 0.8, tower-http 0.7 (`cors` feature, added by this plan), same as the rest of hivewarden.
+**Tech Stack:** axum 0.8, tower-http 0.7 (`cors` feature, added by this plan), same as the rest of wardn.
 
-**Spec:** `console/docs/superpowers/specs/2026-08-21-console-app-design.md`, section "hivewarden change" — this is the one piece of that spec's work that lives in this repo, not `console`.
+**Spec:** `console/docs/superpowers/specs/2026-08-21-console-app-design.md`, section "wardn change" — this is the one piece of that spec's work that lives in this repo, not `console`.
 
 ## Global Constraints
 
@@ -42,8 +42,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use hivewarden::AppState;
-use hivewarden::db;
+use wardn::AppState;
+use wardn::db;
 use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -59,7 +59,7 @@ fn test_sqld_url() -> String {
 #[tokio::test]
 async fn allowed_origin_gets_the_cors_header() {
     let pool = test_pool().await;
-    let app = hivewarden::app(
+    let app = wardn::app(
         AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
             .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
@@ -83,7 +83,7 @@ async fn allowed_origin_gets_the_cors_header() {
 #[tokio::test]
 async fn disallowed_origin_gets_no_cors_header() {
     let pool = test_pool().await;
-    let app = hivewarden::app(
+    let app = wardn::app(
         AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
             .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
@@ -104,7 +104,7 @@ async fn disallowed_origin_gets_no_cors_header() {
 #[tokio::test]
 async fn request_with_no_origin_is_unaffected() {
     let pool = test_pool().await;
-    let app = hivewarden::app(AppState::new(
+    let app = wardn::app(AppState::new(
         pool,
         test_sqld_url(),
         common::TEST_API_KEY_PEPPER.to_string(),

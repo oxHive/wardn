@@ -1,6 +1,6 @@
-# hivewarden Org Membership + Custom Roles — Design
+# wardn Org Membership + Custom Roles — Design
 
-**Status:** Approved. Second sub-project of `hivewarden`, built on the walking skeleton (`docs/superpowers/specs/2026-08-11-walking-skeleton-design.md`).
+**Status:** Approved. Second sub-project of `wardn`, built on the walking skeleton (`docs/superpowers/specs/2026-08-11-walking-skeleton-design.md`).
 
 ## Goal
 

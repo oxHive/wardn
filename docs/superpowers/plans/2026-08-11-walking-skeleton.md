@@ -1,4 +1,4 @@
-# hivewarden Walking Skeleton Implementation Plan
+# wardn Walking Skeleton Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -43,7 +43,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn healthz_returns_ok() {
-    let app = hivewarden::app();
+    let app = wardn::app();
     let resp = app
         .oneshot(
             Request::builder()
@@ -60,7 +60,7 @@ async fn healthz_returns_ok() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test health_test 2>&1 | tail -30`
-Expected: FAIL to compile — `hivewarden::app` doesn't exist yet, and this is a binary-only crate today with no library target for the test to link against.
+Expected: FAIL to compile — `wardn::app` doesn't exist yet, and this is a binary-only crate today with no library target for the test to link against.
 
 - [ ] **Step 3: Add dependencies**
 
@@ -68,16 +68,16 @@ In `Cargo.toml`, replace the `[dependencies]` section:
 
 ```toml
 [package]
-name = "hivewarden"
+name = "wardn"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "hivewarden"
+name = "wardn"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hivewarden"
+name = "wardn"
 path = "src/main.rs"
 
 [dependencies]
@@ -97,7 +97,7 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 ```
 
-(Splitting into a `[lib]` + `[[bin]]` is what lets `tests/*.rs` integration tests import `hivewarden::app()` — this is the standard axum project shape.)
+(Splitting into a `[lib]` + `[[bin]]` is what lets `tests/*.rs` integration tests import `wardn::app()` — this is the standard axum project shape.)
 
 - [ ] **Step 4: Write `config.rs`**
 
@@ -147,14 +147,14 @@ pub fn app() -> Router {
 Replace `src/main.rs`:
 
 ```rust
-use hivewarden::{app, config::Config};
+use wardn::{app, config::Config};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let config = Config::from_env()?;
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivewarden listening on {}", config.listen_addr);
+    tracing::info!("wardn listening on {}", config.listen_addr);
     axum::serve(listener, app()).await?;
     Ok(())
 }
@@ -218,7 +218,7 @@ git commit -m "feat: project scaffold, config, health check, dev services"
 Create `tests/db_test.rs`:
 
 ```rust
-use hivewarden::db;
+use wardn::db;
 use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {
@@ -295,7 +295,7 @@ async fn find_database_mapping_returns_seeded_namespace() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `podman-compose -f podman-compose.yml up -d && cargo test --test db_test 2>&1 | tail -30`
-Expected: FAIL to compile — `hivewarden::db` doesn't exist yet.
+Expected: FAIL to compile — `wardn::db` doesn't exist yet.
 
 - [ ] **Step 3: Write the migration**
 
@@ -444,8 +444,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hivewarden::auth::{self, AppState, AuthedOwner};
-use hivewarden::db;
+use wardn::auth::{self, AppState, AuthedOwner};
+use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -464,7 +464,7 @@ fn test_app(pool: sqlx::PgPool) -> Router {
         .route("/whoami", get(whoami))
         .layer(axum::middleware::from_fn_with_state(
             AppState { pool: pool.clone() },
-            hivewarden::auth::auth_middleware,
+            wardn::auth::auth_middleware,
         ))
         .with_state(AppState { pool })
 }
@@ -602,7 +602,7 @@ async fn revoked_key_returns_401() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test auth_test 2>&1 | tail -30`
-Expected: FAIL to compile — `hivewarden::auth` doesn't exist yet.
+Expected: FAIL to compile — `wardn::auth` doesn't exist yet.
 
 - [ ] **Step 3: Write `auth.rs`**
 
@@ -745,8 +745,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use hivewarden::auth::{self, AppState, AuthedOwner};
-use hivewarden::{db, routing};
+use wardn::auth::{self, AppState, AuthedOwner};
+use wardn::{db, routing};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -859,7 +859,7 @@ async fn returns_404_when_owner_has_no_mapping() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test routing_test 2>&1 | tail -30`
-Expected: FAIL to compile — `hivewarden::routing` doesn't exist yet.
+Expected: FAIL to compile — `wardn::routing` doesn't exist yet.
 
 - [ ] **Step 3: Write `routing.rs`**
 
@@ -922,8 +922,8 @@ Create `tests/proxy_test.rs`:
 ```rust
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use hivewarden::auth::{self, AppState};
-use hivewarden::db;
+use wardn::auth::{self, AppState};
+use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -972,7 +972,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
     .unwrap();
 
     let state = AppState { pool };
-    let app = hivewarden::app(state);
+    let app = wardn::app(state);
 
     // sqld exposes a version endpoint at GET /version on its default HTTP
     // listener — proxying it through confirms the request actually reached
@@ -993,7 +993,7 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
 #[tokio::test]
 async fn missing_key_never_reaches_sqld() {
     let pool = test_pool().await;
-    let app = hivewarden::app(AppState { pool });
+    let app = wardn::app(AppState { pool });
     let resp = app
         .oneshot(Request::builder().uri("/version").body(Body::empty()).unwrap())
         .await
@@ -1024,7 +1024,7 @@ async fn valid_key_with_no_mapping_returns_404() {
     .await
     .unwrap();
 
-    let app = hivewarden::app(AppState { pool });
+    let app = wardn::app(AppState { pool });
     let resp = app
         .oneshot(
             Request::builder()
@@ -1044,7 +1044,7 @@ async fn valid_key_with_no_mapping_returns_404() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `SQLD_URL=http://127.0.0.1:8081 DATABASE_URL=postgres://gateway:gateway@127.0.0.1:5433/gateway cargo test --test proxy_test 2>&1 | tail -30`
-Expected: FAIL to compile — `hivewarden::app` currently takes no arguments (Task 1's signature), and `proxy.rs` doesn't exist.
+Expected: FAIL to compile — `wardn::app` currently takes no arguments (Task 1's signature), and `proxy.rs` doesn't exist.
 
 - [ ] **Step 3: Write `proxy.rs`**
 
@@ -1187,7 +1187,7 @@ pub fn app(state: AppState) -> Router {
 Replace `src/main.rs`:
 
 ```rust
-use hivewarden::{app, config::Config, db, AppState};
+use wardn::{app, config::Config, db, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -1196,13 +1196,13 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&config.database_url).await?;
     let state = AppState { pool };
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("hivewarden listening on {}", config.listen_addr);
+    tracing::info!("wardn listening on {}", config.listen_addr);
     axum::serve(listener, app(state)).await?;
     Ok(())
 }
 ```
 
-Update `tests/health_test.rs`'s `healthz_returns_ok` test to build a real `AppState` (same `test_pool()` helper pattern as the other test files) and call `hivewarden::app(state)` instead of the old no-arg `app()`.
+Update `tests/health_test.rs`'s `healthz_returns_ok` test to build a real `AppState` (same `test_pool()` helper pattern as the other test files) and call `wardn::app(state)` instead of the old no-arg `app()`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
