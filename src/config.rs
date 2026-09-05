@@ -17,6 +17,9 @@ pub struct Config {
     /// `http://loki:3100`). Optional: `None` means logs stay stdout-only,
     /// exactly like today.
     pub loki_url: Option<String>,
+    /// Origins allowed to call this API cross-origin — see `parse_console_origins`
+    /// below and `AppState::cors_origins` (`src/auth.rs`).
+    pub console_origins: Vec<String>,
 }
 
 impl Config {
@@ -49,6 +52,64 @@ impl Config {
             api_key_pepper,
             otel_exporter_otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
             loki_url: std::env::var("LOKI_URL").ok(),
+            console_origins: parse_console_origins(std::env::var("CONSOLE_ORIGINS").ok().as_deref()),
         })
+    }
+}
+
+/// Parses `CONSOLE_ORIGINS` (comma-separated, whitespace around each entry
+/// trimmed, empty entries dropped) into the list `AppState::cors_origins`
+/// wants. Pulled out as its own function — separate from `Config::from_env`
+/// — so it's testable without needing every other required env var set.
+/// `None` (the var is unset) and `Some("")` both fall back to the local
+/// `console` dev server, matching `AppState::new`'s own default so a
+/// deployment that never sets this var behaves identically to one built
+/// straight from `AppState::new` with no builder calls.
+pub fn parse_console_origins(raw: Option<&str>) -> Vec<String> {
+    let default = || vec!["http://localhost:5173".to_string()];
+    match raw {
+        None => default(),
+        Some(raw) => {
+            let origins: Vec<String> = raw
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if origins.is_empty() { default() } else { origins }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unset_falls_back_to_local_console_dev_server() {
+        assert_eq!(parse_console_origins(None), vec!["http://localhost:5173".to_string()]);
+    }
+
+    #[test]
+    fn empty_string_falls_back_to_the_same_default() {
+        assert_eq!(parse_console_origins(Some("")), vec!["http://localhost:5173".to_string()]);
+    }
+
+    #[test]
+    fn splits_and_trims_a_comma_separated_list() {
+        assert_eq!(
+            parse_console_origins(Some(" https://console.oxhive.dev , http://localhost:5173 ")),
+            vec![
+                "https://console.oxhive.dev".to_string(),
+                "http://localhost:5173".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn drops_empty_entries_from_a_trailing_comma() {
+        assert_eq!(
+            parse_console_origins(Some("https://console.oxhive.dev,")),
+            vec!["https://console.oxhive.dev".to_string()]
+        );
     }
 }

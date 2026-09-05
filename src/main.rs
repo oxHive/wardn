@@ -83,7 +83,8 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(pool, config.sqld_url.clone(), config.api_key_pepper.clone())
         .with_sqld_admin_url(config.sqld_admin_url.clone())
         .with_metrics_handle(metrics_handle)
-        .with_metrics_token(config.metrics_token.clone());
+        .with_metrics_token(config.metrics_token.clone())
+        .with_cors_origins(config.console_origins.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("hivewarden listening on {}", config.listen_addr);
     axum::serve(
