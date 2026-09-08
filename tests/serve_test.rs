@@ -102,6 +102,66 @@ async fn unknown_key_is_unauthorized() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// Guards Decision 5's "'CLI Only' Does Not Mean 'No API'" section:
+/// `wardn serve`'s API is narrowly authorization checks + a health/status
+/// readout, never a general org/member/role/key admin surface — that stays
+/// CLI/direct-DB only. These are exactly the routes the pre-Wardn
+/// `hivemind-gateway` design exposed (`/orgs`, `/orgs/{id}/members`,
+/// `/orgs/{id}/roles`, `/api-keys`, ...) plus the natural `/v1`-versioned
+/// equivalents one might reach for next to `/v1/authorize` — if any of
+/// these ever starts responding, an admin endpoint has crept back into
+/// this service and this test should fail.
+#[tokio::test]
+async fn no_admin_management_endpoints_exist() {
+    let (_dir, db) = common::temp_db().await;
+    org::create(&db.conn, "Acme").await.unwrap();
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
+
+    let forbidden_paths = [
+        // The old hivemind-gateway's actual admin API shape.
+        "/orgs",
+        "/orgs/org-id",
+        "/orgs/org-id/members",
+        "/orgs/org-id/members/user-id",
+        "/orgs/org-id/members/user-id/role",
+        "/orgs/org-id/roles",
+        "/orgs/org-id/roles/role-id",
+        "/api-keys",
+        "/api-keys/key-id",
+        "/users",
+        // Natural `/v1`-versioned admin-API guesses, alongside the one
+        // narrow endpoint (/v1/authorize) that legitimately exists.
+        "/v1/org",
+        "/v1/orgs",
+        "/v1/members",
+        "/v1/members/member-id",
+        "/v1/roles",
+        "/v1/keys",
+        "/v1/keys/key-id",
+    ];
+
+    for path in forbidden_paths {
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{method} {path} should not exist on wardn serve's API"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn status_reports_org_name_and_member_count() {
     let (_dir, db) = common::temp_db().await;
