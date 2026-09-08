@@ -25,9 +25,12 @@ COPY --from=builder /build/target/release/wardn /usr/local/bin/wardn
 
 USER wardn
 # The local libSQL database lives under the container user's home
-# (~/.local/share/wardn/org.db by default) — a home directory is required
-# for that default to resolve, unlike the old proxy which had no local state.
+# (~/.local/share/wardn/org.db by default) unless WARDN_DB_PATH overrides
+# it — a home directory is required for that default to resolve, unlike the
+# old proxy which had no local state. WARDN_LISTEN_ADDR must be set to
+# something other than the 127.0.0.1 default for `serve` to be reachable
+# from outside the container (podman-compose.yml sets both).
 ENV HOME=/home/wardn
 EXPOSE 7787
 ENTRYPOINT ["/usr/local/bin/wardn"]
-CMD ["serve", "--listen", "0.0.0.0:7787"]
+CMD ["serve"]

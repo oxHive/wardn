@@ -31,6 +31,38 @@ thiserror = "1"
 reqwest = { version = "0.12", features = ["json"] }
 dirs = "5"
 
+# Observability — gated behind the "observability" feature (on by default)
+# so a minimal build (e.g. for a Raspberry Pi, see WARDN_SPECIFICATION.md's
+# Decision 3) can drop OTel/Prometheus/Loki entirely with
+# `--no-default-features`. Even with the feature compiled in, each exporter
+# stays off at runtime unless its env var is set (see src/config.rs) —
+# metrics, tracing export, and log shipping are each independently
+# toggleable, not all-or-nothing.
+metrics = { version = "0.24.6", optional = true }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false, optional = true }
+opentelemetry = { version = "0.32.0", optional = true }
+opentelemetry_sdk = { version = "0.32.1", optional = true }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.33.0", optional = true }
+tracing-loki = { version = "0.2.7", optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+url = { version = "2.5.8", optional = true }
+
+[features]
+default = ["observability"]
+observability = [
+  "dep:metrics",
+  "dep:metrics-exporter-prometheus",
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:tracing-opentelemetry",
+  "dep:tracing-loki",
+  "dep:tower-http",
+  "dep:url",
+  "tracing-subscriber/json",
+]
+
 [dev-dependencies]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

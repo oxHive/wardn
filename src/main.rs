@@ -105,14 +105,10 @@ enum KeysCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
     let db_path = config::db_path(cli.db.as_deref());
+    let is_serve = matches!(cli.command, Command::Serve { .. });
+    init_tracing(is_serve)?;
 
     match cli.command {
         Command::Init { name } => cmd_init(&db_path, name).await,
@@ -121,6 +117,68 @@ async fn main() -> Result<()> {
         Command::Status => cmd_status(&db_path).await,
         Command::Serve { listen } => cmd_serve(&db_path, listen).await,
     }
+}
+
+fn default_env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
+/// One-off CLI commands (`org invite`, `keys create`, ...) get plain,
+/// human-readable logs — nobody wants JSON scrolling past a `wardn status`
+/// call. Only `wardn serve`, the long-running process, gets the full
+/// structured setup: JSON logs, plus OTel trace export and Loki log
+/// shipping when the "observability" feature is compiled in *and* their
+/// env vars are set (see `src/config.rs`) — both are independently
+/// optional, so this degrades cleanly all the way down to stdout-only.
+fn init_tracing(serve_mode: bool) -> Result<()> {
+    if !serve_mode {
+        tracing_subscriber::fmt()
+            .with_env_filter(default_env_filter())
+            .init();
+        return Ok(());
+    }
+
+    #[cfg(feature = "observability")]
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let otel_layer = config::observability::otel_exporter_otlp_endpoint()
+            .as_deref()
+            .map(wardn::telemetry::init_tracer)
+            .transpose()?
+            .map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
+
+        let mut loki_task = None;
+        let loki_layer = match config::observability::loki_url() {
+            Some(url) => {
+                let (layer, task) = wardn::telemetry::init_loki_layer(&url)?;
+                loki_task = Some(task);
+                Some(layer)
+            }
+            None => None,
+        };
+
+        tracing_subscriber::registry()
+            .with(default_env_filter())
+            .with(tracing_subscriber::fmt::layer().json())
+            .with(otel_layer)
+            .with(loki_layer)
+            .init();
+
+        if let Some(task) = loki_task {
+            tokio::spawn(task);
+        }
+    }
+
+    #[cfg(not(feature = "observability"))]
+    {
+        tracing_subscriber::fmt()
+            .with_env_filter(default_env_filter())
+            .init();
+    }
+
+    Ok(())
 }
 
 fn prompt(message: &str) -> Result<String> {
@@ -303,10 +361,21 @@ async fn cmd_serve(db_path: &str, listen: Option<String>) -> Result<()> {
         bail!("no org exists yet — run `wardn init` first");
     }
     let listen_addr = listen.unwrap_or_else(config::default_listen_addr);
-    let state = serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    };
+
+    #[cfg_attr(not(feature = "observability"), allow(unused_mut))]
+    let mut state = serve::AppState::new(db.conn, wardn::db::now());
+
+    // Metrics stay off (no global recorder installed at all) unless
+    // WARDN_METRICS_TOKEN is set — see src/config.rs and
+    // src/observability.rs.
+    #[cfg(feature = "observability")]
+    if let Some(token) = config::observability::metrics_token() {
+        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .context("installing prometheus recorder")?;
+        state = state.with_metrics(handle, token);
+    }
+
     let listener = tokio::net::TcpListener::bind(&listen_addr)
         .await
         .with_context(|| format!("binding {listen_addr}"))?;

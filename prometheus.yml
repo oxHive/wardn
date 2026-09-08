@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: wardn
+    authorization:
+      # Local-dev-only placeholder — do not reuse this value for a real
+      # deployment. Set it to match whatever you configured as
+      # WARDN_METRICS_TOKEN for the wardn service.
+      credentials: dev-metrics-token
+    static_configs:
+      - targets: ["wardn:7787"]

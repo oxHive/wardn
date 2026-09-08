@@ -17,10 +17,11 @@ Wardn solves:  "your team can share and control access to memory,
 ```
 
 **Status:** implements the full CLI surface (org/member/role/key
-management), a local libSQL-backed store, and `wardn serve`, the narrow
-HTTP authorization API Mynd calls before touching org-layer memory. No
-billing, no multi-org routing, no GUI — that's all deliberately out of
-scope for this repository (see `WARDN_SPECIFICATION.md`).
+management), a local libSQL-backed store, `wardn serve` (the narrow HTTP
+authorization API Mynd calls before touching org-layer memory), and
+toggleable observability (Prometheus metrics, OTel tracing, Loki logs — see
+below). No billing, no multi-org routing, no GUI — that's all deliberately
+out of scope for this repository (see `WARDN_SPECIFICATION.md`).
 
 ## Quickstart
 
@@ -91,6 +92,40 @@ read_only   — read org-layer memory only, cannot write, cannot
               manage membership
 ```
 
+## Observability (optional, toggleable)
+
+`wardn serve` can export Prometheus metrics, OTel traces, and Loki logs —
+none of it is required, and each piece toggles independently:
+
+```
+Compile-time toggle:  the "observability" feature, on by default.
+                       `cargo build --no-default-features` drops OTel,
+                       Prometheus, and Loki as dependencies entirely — for
+                       the smallest possible binary (e.g. a Raspberry Pi).
+
+Runtime toggle:        with the feature compiled in, each exporter still
+                       stays off until its env var is set:
+                         WARDN_METRICS_TOKEN          -> GET /metrics
+                         OTEL_EXPORTER_OTLP_ENDPOINT  -> trace export
+                         LOKI_URL                     -> log shipping
+```
+
+Setting none of them is the default and leaves `wardn serve` exactly as
+lightweight as if the feature weren't compiled in — just JSON logs to
+stdout. `GET /metrics` 404s (not just "unauthenticated") until
+`WARDN_METRICS_TOKEN` is set, at which point it also becomes the bearer
+token callers must present.
+
+A local Grafana/Prometheus/Tempo/Loki/otel-collector stack to point these
+at is one command away, off by default:
+
+```sh
+podman-compose --profile observability up -d --build
+```
+
+See `.env.example` for the full set of variables and `podman-compose.yml`
+for how the stack is wired together.
+
 ## Storage
 
 A single embedded libSQL database file — no external database server to
@@ -115,6 +150,10 @@ cargo build
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt
+
+# Same again without the observability stack compiled in:
+cargo test --no-default-features
+cargo clippy --all-targets --no-default-features -- -D warnings
 ```
 
 ## License

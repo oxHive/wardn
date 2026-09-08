@@ -1,0 +1,94 @@
+version: "3"
+services:
+  wardn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      WARDN_DB_PATH: /data/org.db
+      WARDN_LISTEN_ADDR: 0.0.0.0:7787
+      # All three are optional and independently toggleable — unset (the
+      # default) means that piece of observability stays off. Set them to
+      # turn wardn's own exporters on; bring up the "observability" profile
+      # below to have somewhere local for them to go.
+      WARDN_METRICS_TOKEN: ${WARDN_METRICS_TOKEN:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      LOKI_URL: ${LOKI_URL:-}
+    volumes:
+      - wardn-data:/data
+    # Loopback only — wardn serve is an authorization service Mynd calls
+    # locally, not a public API.
+    ports:
+      - "127.0.0.1:7787:7787"
+
+  # --- Observability stack: entirely optional, off by default. ---
+  #
+  # Bring it up alongside wardn with:
+  #   WARDN_METRICS_TOKEN=dev-metrics-token \
+  #   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+  #   LOKI_URL=http://loki:3100 \
+  #   podman-compose --profile observability up -d --build
+  #
+  # (see .env.example for the same variables in .env form). Run
+  # `podman-compose up -d --build` with no profile and none of this exists —
+  # just the wardn service above, exactly as small as the spec intends.
+  loki:
+    image: docker.io/grafana/loki:latest
+    profiles: ["observability"]
+    # No host-published port: only wardn (log push) and grafana (query)
+    # need to reach it, both over the compose network.
+
+  tempo:
+    image: docker.io/grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro,Z
+    profiles: ["observability"]
+    # No host-published port: only otel-collector (OTLP) and grafana
+    # (query) need to reach it.
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro,Z
+    depends_on:
+      - tempo
+    profiles: ["observability"]
+    # No host-published port: only wardn needs to reach it, over the
+    # compose network.
+
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    volumes:
+      # `Z` relabels the mount for rootless-podman + SELinux-enforcing hosts;
+      # harmless no-op elsewhere.
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+    # Local-dev-only, unauthenticated by default — loopback only, matching
+    # every other service in this file.
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - wardn
+    profiles: ["observability"]
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    volumes:
+      # `Z` relabels the mount for rootless-podman + SELinux-enforcing hosts;
+      # harmless no-op elsewhere.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,Z
+    environment:
+      # Local dev only: anonymous viewer access so `podman-compose up`
+      # gives a ready-to-browse Grafana with no login step. Loopback only,
+      # same posture as every other service here.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    profiles: ["observability"]
+
+volumes:
+  wardn-data:

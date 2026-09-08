@@ -28,10 +28,7 @@ fn authorize_request(api_key: &str, action: &str) -> Request<Body> {
 #[tokio::test]
 async fn healthz_returns_ok() {
     let (_dir, db) = common::temp_db().await;
-    let app = serve::app(serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    });
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
     let response = app
         .oneshot(
             Request::builder()
@@ -54,10 +51,7 @@ async fn admin_key_is_authorized_to_read_and_write() {
     let (_key, admin_key) = wardn::api_keys::create(&db.conn, &admin.id, None)
         .await
         .unwrap();
-    let app = serve::app(serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    });
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
 
     let response = app
         .oneshot(authorize_request(&admin_key, "write"))
@@ -79,10 +73,7 @@ async fn read_only_key_cannot_write() {
     let (_key, reader_key) = wardn::api_keys::create(&db.conn, &reader.id, None)
         .await
         .unwrap();
-    let app = serve::app(serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    });
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
 
     let read_response = app
         .clone()
@@ -102,10 +93,7 @@ async fn read_only_key_cannot_write() {
 async fn unknown_key_is_unauthorized() {
     let (_dir, db) = common::temp_db().await;
     org::create(&db.conn, "Acme").await.unwrap();
-    let app = serve::app(serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    });
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
 
     let response = app
         .oneshot(authorize_request("wd_doesnotexist", "read"))
@@ -121,10 +109,7 @@ async fn status_reports_org_name_and_member_count() {
     members::invite(&db.conn, "one@example.com", Role::Member, None)
         .await
         .unwrap();
-    let app = serve::app(serve::AppState {
-        conn: db.conn,
-        started_at: wardn::db::now(),
-    });
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
 
     let response = app
         .oneshot(
