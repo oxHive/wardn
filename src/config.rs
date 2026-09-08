@@ -140,4 +140,62 @@ mod tests {
             assert_eq!(resolve_metrics_token(None), None);
         }
     }
+
+    /// Exercises the thin wrappers that read the *real* process
+    /// environment (`db_path`, `default_listen_addr`, and — under the
+    /// "observability" feature — `metrics_token`/
+    /// `otel_exporter_otlp_endpoint`/`loki_url`), as opposed to the pure
+    /// `resolve_*` functions above. This is deliberately the only test in
+    /// this crate that touches `WARDN_DB_PATH`/`WARDN_LISTEN_ADDR`/
+    /// `WARDN_METRICS_TOKEN`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`LOKI_URL` — env
+    /// vars are process-global, so mutating them safely requires either no
+    /// other test touching the same names (true here) or doing it all
+    /// sequentially within one test function (also true here).
+    #[test]
+    fn wrapper_functions_read_the_real_process_environment() {
+        unsafe {
+            std::env::set_var("WARDN_DB_PATH", "/from-env/org.db");
+        }
+        assert_eq!(db_path(None), "/from-env/org.db");
+        assert_eq!(db_path(Some("/override.db")), "/override.db");
+        unsafe {
+            std::env::remove_var("WARDN_DB_PATH");
+        }
+        assert_eq!(db_path(None), default_db_path());
+
+        unsafe {
+            std::env::set_var("WARDN_LISTEN_ADDR", "0.0.0.0:1234");
+        }
+        assert_eq!(default_listen_addr(), "0.0.0.0:1234");
+        unsafe {
+            std::env::remove_var("WARDN_LISTEN_ADDR");
+        }
+        assert_eq!(default_listen_addr(), "127.0.0.1:7787");
+
+        #[cfg(feature = "observability")]
+        {
+            unsafe {
+                std::env::set_var("WARDN_METRICS_TOKEN", "secret");
+                std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317");
+                std::env::set_var("LOKI_URL", "http://127.0.0.1:3100");
+            }
+            assert_eq!(observability::metrics_token(), Some("secret".to_string()));
+            assert_eq!(
+                observability::otel_exporter_otlp_endpoint(),
+                Some("http://127.0.0.1:4317".to_string())
+            );
+            assert_eq!(
+                observability::loki_url(),
+                Some("http://127.0.0.1:3100".to_string())
+            );
+            unsafe {
+                std::env::remove_var("WARDN_METRICS_TOKEN");
+                std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+                std::env::remove_var("LOKI_URL");
+            }
+            assert_eq!(observability::metrics_token(), None);
+            assert_eq!(observability::otel_exporter_otlp_endpoint(), None);
+            assert_eq!(observability::loki_url(), None);
+        }
+    }
 }

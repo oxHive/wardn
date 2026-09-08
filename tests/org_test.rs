@@ -57,3 +57,9 @@ async fn delete_removes_org_and_members_and_keys() {
     assert!(wardn::members::list(&db.conn).await.unwrap().is_empty());
     assert!(wardn::api_keys::list(&db.conn).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn delete_without_an_org_fails() {
+    let (_dir, db) = common::temp_db().await;
+    assert!(org::delete(&db.conn).await.is_err());
+}

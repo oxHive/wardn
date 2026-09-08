@@ -413,3 +413,29 @@ async fn shutdown_signal() {
     }
     tracing::info!("shutdown signal received, draining in-flight requests");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_env_filter_is_constructible() {
+        let _ = default_env_filter();
+    }
+
+    /// Exercises `init_tracing`'s "serve" branch — JSON logs plus the
+    /// optional OTel/Loki layers (both `None` here, since neither env var
+    /// is set). `tracing_subscriber`'s `.init()` only tolerates being
+    /// called once per process, so this is deliberately the *only* test in
+    /// this crate that calls `init_tracing` — every other test in this
+    /// binary (`config`'s and `roles`' unit tests) leaves the global
+    /// subscriber alone.
+    #[test]
+    fn init_tracing_serve_mode_sets_up_the_registry_once() {
+        unsafe {
+            std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+            std::env::remove_var("LOKI_URL");
+        }
+        init_tracing(true).unwrap();
+    }
+}

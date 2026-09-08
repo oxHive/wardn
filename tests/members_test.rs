@@ -108,3 +108,41 @@ async fn set_role_on_removed_member_fails() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn invite_rejects_a_blank_email() {
+    let (_dir, db) = common::temp_db().await;
+    let err = members::invite(&db.conn, "   ", Role::Member, None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("empty"));
+}
+
+#[tokio::test]
+async fn find_by_id_returns_none_for_an_unknown_id() {
+    let (_dir, db) = common::temp_db().await;
+    assert!(
+        members::find_by_id(&db.conn, "no-such-member")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn remove_fails_for_an_unknown_id() {
+    let (_dir, db) = common::temp_db().await;
+    let err = members::remove(&db.conn, "no-such-member")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no member"));
+}
+
+#[tokio::test]
+async fn set_role_fails_for_an_unknown_id() {
+    let (_dir, db) = common::temp_db().await;
+    let err = members::set_role(&db.conn, "no-such-member", Role::Admin)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no member"));
+}

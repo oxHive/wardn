@@ -185,3 +185,70 @@ async fn status_reports_org_name_and_member_count() {
     assert_eq!(body["org_name"], "Acme");
     assert_eq!(body["member_count"], 1);
 }
+
+#[tokio::test]
+async fn status_returns_500_when_the_org_query_fails() {
+    let (_dir, db) = common::temp_db().await;
+    org::create(&db.conn, "Acme").await.unwrap();
+    let conn = db.conn.clone();
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
+
+    // Not producible through the public API — simulates a corrupted
+    // database to exercise `status`'s error path (a real DB error, not a
+    // fabricated one) rather than leaving it entirely untested.
+    conn.execute("DROP TABLE org", ()).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn status_returns_500_when_the_members_query_fails() {
+    let (_dir, db) = common::temp_db().await;
+    org::create(&db.conn, "Acme").await.unwrap();
+    let conn = db.conn.clone();
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
+
+    conn.execute("DROP TABLE members", ()).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn authorize_returns_500_when_key_verification_fails() {
+    let (_dir, db) = common::temp_db().await;
+    org::create(&db.conn, "Acme").await.unwrap();
+    let admin = members::invite(&db.conn, "admin4@example.com", Role::Admin, None)
+        .await
+        .unwrap();
+    let (_key, admin_key) = wardn::api_keys::create(&db.conn, &admin.id, None)
+        .await
+        .unwrap();
+    let conn = db.conn.clone();
+    let app = serve::app(serve::AppState::new(db.conn, wardn::db::now()));
+
+    conn.execute("DROP TABLE api_keys", ()).await.unwrap();
+
+    let response = app
+        .oneshot(authorize_request(&admin_key, "read"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

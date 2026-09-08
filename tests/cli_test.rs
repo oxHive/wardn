@@ -185,6 +185,10 @@ async fn keys_command_lifecycle() {
         .unwrap()
         .unwrap();
     assert!(revoked.revoked_at.is_some());
+
+    // Listing again exercises the "revoked" branch of `keys list`'s
+    // display logic, not just the "active" one covered above.
+    cli::cmd_keys(&db_path, KeysCommand::List).await.unwrap();
 }
 
 #[tokio::test]
@@ -201,4 +205,13 @@ async fn status_reports_uninitialized_and_initialized_states() {
         .await
         .unwrap();
     cli::cmd_status(&db_path).await.unwrap();
+}
+
+#[tokio::test]
+async fn org_command_delete_fails_without_an_org() {
+    let (_dir, db_path) = common::temp_db_path();
+    let err = cli::cmd_org(&db_path, OrgCommand::Delete { yes: true })
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no org exists"));
 }

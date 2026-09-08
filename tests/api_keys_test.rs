@@ -118,3 +118,54 @@ async fn list_returns_keys_newest_first() {
     assert!(keys.iter().any(|k| k.id == first.id));
     assert!(keys.iter().any(|k| k.id == second.id));
 }
+
+#[tokio::test]
+async fn create_fails_for_a_nonexistent_member() {
+    let (_dir, db) = common::temp_db().await;
+    let err = api_keys::create(&db.conn, "no-such-member", None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no member"));
+}
+
+#[tokio::test]
+async fn find_by_id_returns_none_for_an_unknown_id() {
+    let (_dir, db) = common::temp_db().await;
+    assert!(
+        api_keys::find_by_id(&db.conn, "no-such-key")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn revoke_fails_for_an_unknown_key_id() {
+    let (_dir, db) = common::temp_db().await;
+    let err = api_keys::revoke(&db.conn, "no-such-key").await.unwrap_err();
+    assert!(err.to_string().contains("no api key"));
+}
+
+#[tokio::test]
+async fn verify_fails_closed_when_the_stored_hash_is_corrupted() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "corrupt@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (_key, full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+
+    // Simulate a corrupted key_hash column (not producible through the
+    // public API) — `verify` must fail closed, not panic or error, when
+    // `PasswordHash::new` can't even parse the stored value.
+    db.conn
+        .execute("UPDATE api_keys SET key_hash = 'not-an-argon2-hash'", ())
+        .await
+        .unwrap();
+
+    assert!(
+        api_keys::verify(&db.conn, &full_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
