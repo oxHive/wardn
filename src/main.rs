@@ -1,108 +1,322 @@
+use std::io::Write;
 use std::time::Duration;
 
-use wardn::{AppState, app, config::Config, db, observability, provisioning, telemetry};
-use metrics_exporter_prometheus::PrometheusBuilder;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-/// How often the background provisioning worker retries pending outbox
-/// rows. See `docs/superpowers/specs/2026-08-12-database-provisioning-design.md`.
-const PROVISIONING_WORKER_INTERVAL: Duration = Duration::from_secs(30);
+use wardn::{Db, config, members::Member, org::Org, roles::Role, serve};
 
-/// How often the background health-check loop probes sqld for reachability.
-/// See `observability::sqld_health_check_loop`.
-const SQLD_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+#[derive(Parser)]
+#[command(name = "wardn", version, about = "Org & access layer for Mynd")]
+struct Cli {
+    /// Path to the local libSQL database. Defaults to
+    /// `~/.local/share/wardn/org.db`, or `$WARDN_DB_PATH` if set.
+    #[arg(long, global = true)]
+    db: Option<String>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// First-run setup: creates the local database and the org.
+    Init {
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Manage the org this instance holds.
+    Org {
+        #[command(subcommand)]
+        command: OrgCommand,
+    },
+    /// Manage API keys used to authenticate against `wardn serve`.
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommand,
+    },
+    /// Org name, member count, storage path, and whether `wardn serve` is
+    /// reachable.
+    Status,
+    /// Start the HTTP authorization service Mynd instances call.
+    Serve {
+        #[arg(long)]
+        listen: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum OrgCommand {
+    /// Creates the org (fails if one already exists — see Decision 2).
+    Create {
+        #[arg(long)]
+        name: String,
+    },
+    Rename {
+        #[arg(long)]
+        name: String,
+    },
+    /// Deletes the org and every member/key with it. Requires confirmation
+    /// unless `--yes` is passed.
+    Delete {
+        #[arg(long)]
+        yes: bool,
+    },
+    Invite {
+        email: String,
+        #[arg(long, default_value = "member")]
+        role: String,
+    },
+    Members {
+        #[command(subcommand)]
+        command: MembersCommand,
+    },
+    Role {
+        #[command(subcommand)]
+        command: RoleCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum MembersCommand {
+    List,
+    Remove { member_id: String },
+}
+
+#[derive(Subcommand)]
+enum RoleCommand {
+    Set { member_id: String, role: String },
+}
+
+#[derive(Subcommand)]
+enum KeysCommand {
+    Create {
+        #[arg(long)]
+        member: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    Revoke {
+        key_id: String,
+    },
+    List,
+}
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // `Config::from_env` must run before the subscriber is built — whether
-    // the OTel/Loki layers exist at all depends on its output.
-    let config = Config::from_env()?;
-
-    // The OTel layer and the Loki layer are each `Option<Layer>` — a blanket
-    // impl in tracing_subscriber makes `Option<L>: Layer<S>` a no-op when
-    // `None`, so the subscriber degrades cleanly to today's stdout-JSON-only
-    // behavior when neither OTEL_EXPORTER_OTLP_ENDPOINT nor LOKI_URL is set.
-    let otel_layer = config
-        .otel_exporter_otlp_endpoint
-        .as_deref()
-        .map(telemetry::init_tracer)
-        .transpose()?
-        .map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
-
-    let mut loki_task = None;
-    let loki_layer = match config.loki_url.as_deref() {
-        Some(loki_url) => {
-            let (layer, task) = telemetry::init_loki_layer(loki_url)?;
-            loki_task = Some(task);
-            Some(layer)
-        }
-        None => None,
-    };
-
-    // JSON output for aggregator-friendly NDJSON, but still honouring
-    // `RUST_LOG` — `fmt().json()` alone hard-wires the level floor to INFO
-    // with no way to raise or lower verbosity in a deployed environment,
-    // which the plain `fmt::init()` this replaced did support.
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer().json())
-        .with(otel_layer)
-        .with(loki_layer)
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
-    if let Some(task) = loki_task {
-        tokio::spawn(task);
+    let cli = Cli::parse();
+    let db_path = config::db_path(cli.db.as_deref());
+
+    match cli.command {
+        Command::Init { name } => cmd_init(&db_path, name).await,
+        Command::Org { command } => cmd_org(&db_path, command).await,
+        Command::Keys { command } => cmd_keys(&db_path, command).await,
+        Command::Status => cmd_status(&db_path).await,
+        Command::Serve { listen } => cmd_serve(&db_path, listen).await,
     }
+}
 
-    let pool = db::connect(&config.database_url).await?;
+fn prompt(message: &str) -> Result<String> {
+    print!("{message}");
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_string())
+}
 
-    let metrics_handle = PrometheusBuilder::new()
-        .install_recorder()
-        .expect("install prometheus recorder");
+fn print_org(org: &Org) {
+    println!("org: {} ({})", org.name, org.id);
+}
 
-    let worker_pool = pool.clone();
-    let worker_admin_url = config.sqld_admin_url.clone();
-    tokio::spawn(provisioning::run_worker(
-        worker_pool,
-        worker_admin_url,
-        PROVISIONING_WORKER_INTERVAL,
-    ));
+fn print_member(member: &Member) {
+    let status = if member.removed_at.is_some() {
+        " [removed]"
+    } else {
+        ""
+    };
+    println!("{}\t{}\t{}{}", member.id, member.email, member.role, status);
+}
 
-    let health_check_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest client construction with these settings cannot fail");
-    tokio::spawn(observability::sqld_health_check_loop(
-        health_check_client,
-        config.sqld_url.clone(),
-        SQLD_HEALTH_CHECK_INTERVAL,
-    ));
-
-    let state = AppState::new(pool, config.sqld_url.clone(), config.api_key_pepper.clone())
-        .with_sqld_admin_url(config.sqld_admin_url.clone())
-        .with_metrics_handle(metrics_handle)
-        .with_metrics_token(config.metrics_token.clone())
-        .with_cors_origins(config.console_origins.clone());
-    let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
-    tracing::info!("wardn listening on {}", config.listen_addr);
-    axum::serve(
-        listener,
-        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+async fn cmd_init(db_path: &str, name: Option<String>) -> Result<()> {
+    let db = Db::open(db_path).await?;
+    if let Some(existing) = wardn::org::get(&db.conn).await? {
+        println!("wardn is already initialized at {db_path}");
+        print_org(&existing);
+        return Ok(());
+    }
+    let name = match name {
+        Some(name) => name,
+        None => prompt("Org name: ")?,
+    };
+    if name.trim().is_empty() {
+        bail!("org name must not be empty");
+    }
+    let org = wardn::org::create(&db.conn, name.trim()).await?;
+    println!("Created database at {db_path}");
+    print_org(&org);
     Ok(())
 }
 
-/// Resolves on SIGINT (Ctrl+C, works everywhere) or SIGTERM (the signal
-/// `podman stop`/Kubernetes send, Unix-only — there is no non-Unix
-/// equivalent for `axum::serve` to wait on). Without this, either signal
-/// kills the process immediately: in-flight requests get their connection
-/// cut mid-response, and the provisioning worker/health-check loop (spawned
-/// tasks, not part of `axum::serve`) are aborted wherever they happened to
-/// be, mid-outbox-row-update included.
+async fn cmd_org(db_path: &str, command: OrgCommand) -> Result<()> {
+    let db = Db::open(db_path)
+        .await
+        .with_context(|| format!("opening {db_path}"))?;
+    match command {
+        OrgCommand::Create { name } => {
+            let org = wardn::org::create(&db.conn, &name).await?;
+            print_org(&org);
+        }
+        OrgCommand::Rename { name } => {
+            let org = wardn::org::rename(&db.conn, &name).await?;
+            print_org(&org);
+        }
+        OrgCommand::Delete { yes } => {
+            let Some(org) = wardn::org::get(&db.conn).await? else {
+                bail!("no org exists yet — run `wardn init` first");
+            };
+            if !yes {
+                let answer = prompt(&format!(
+                    "This permanently deletes org \"{}\" and all its members and API keys. Type the org name to confirm: ",
+                    org.name
+                ))?;
+                if answer != org.name {
+                    bail!("confirmation did not match — org not deleted");
+                }
+            }
+            wardn::org::delete(&db.conn).await?;
+            println!("Deleted org \"{}\"", org.name);
+        }
+        OrgCommand::Invite { email, role } => {
+            let role: Role = role
+                .parse()
+                .map_err(|e: wardn::roles::InvalidRole| anyhow::anyhow!(e))?;
+            let member = wardn::members::invite(&db.conn, &email, role, None).await?;
+            print_member(&member);
+        }
+        OrgCommand::Members { command } => match command {
+            MembersCommand::List => {
+                for member in wardn::members::list(&db.conn).await? {
+                    print_member(&member);
+                }
+            }
+            MembersCommand::Remove { member_id } => {
+                wardn::members::remove(&db.conn, &member_id).await?;
+                println!("Removed member {member_id}");
+            }
+        },
+        OrgCommand::Role { command } => match command {
+            RoleCommand::Set { member_id, role } => {
+                let role: Role = role
+                    .parse()
+                    .map_err(|e: wardn::roles::InvalidRole| anyhow::anyhow!(e))?;
+                let member = wardn::members::set_role(&db.conn, &member_id, role).await?;
+                print_member(&member);
+            }
+        },
+    }
+    Ok(())
+}
+
+async fn cmd_keys(db_path: &str, command: KeysCommand) -> Result<()> {
+    let db = Db::open(db_path).await?;
+    match command {
+        KeysCommand::Create { member, name } => {
+            let (key, full_key) =
+                wardn::api_keys::create(&db.conn, &member, name.as_deref()).await?;
+            println!("Created API key {} for member {}", key.id, key.member_id);
+            println!();
+            println!("{full_key}");
+            println!();
+            println!("This key is shown once and cannot be recovered — store it now.");
+        }
+        KeysCommand::Revoke { key_id } => {
+            wardn::api_keys::revoke(&db.conn, &key_id).await?;
+            println!("Revoked API key {key_id}");
+        }
+        KeysCommand::List => {
+            for key in wardn::api_keys::list(&db.conn).await? {
+                let label = key.label.as_deref().unwrap_or("-");
+                let status = if key.revoked_at.is_some() {
+                    "revoked"
+                } else {
+                    "active"
+                };
+                println!(
+                    "{}\t{}\t{}\tmember={}\t{}",
+                    key.id, key.key_prefix, label, key.member_id, status
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_status(db_path: &str) -> Result<()> {
+    let db = Db::open(db_path).await?;
+    let org = wardn::org::get(&db.conn).await?;
+    let members = wardn::members::list(&db.conn).await?;
+
+    println!("storage path: {db_path}");
+    match &org {
+        Some(org) => println!("org: {} ({})", org.name, org.id),
+        None => println!("org: not initialized — run `wardn init`"),
+    }
+    println!("members: {}", members.len());
+
+    let listen_addr = config::default_listen_addr();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()?;
+    match client
+        .get(format!("http://{listen_addr}/v1/status"))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            #[derive(serde::Deserialize)]
+            struct Status {
+                started_at: i64,
+            }
+            match resp.json::<Status>().await {
+                Ok(status) => {
+                    let uptime = wardn::db::now() - status.started_at;
+                    println!("serve: running at {listen_addr} (uptime {uptime}s)");
+                }
+                Err(_) => println!("serve: running at {listen_addr}"),
+            }
+        }
+        _ => println!("serve: not running (checked {listen_addr})"),
+    }
+    Ok(())
+}
+
+async fn cmd_serve(db_path: &str, listen: Option<String>) -> Result<()> {
+    let db = Db::open(db_path).await?;
+    if wardn::org::get(&db.conn).await?.is_none() {
+        bail!("no org exists yet — run `wardn init` first");
+    }
+    let listen_addr = listen.unwrap_or_else(config::default_listen_addr);
+    let state = serve::AppState {
+        conn: db.conn,
+        started_at: wardn::db::now(),
+    };
+    let listener = tokio::net::TcpListener::bind(&listen_addr)
+        .await
+        .with_context(|| format!("binding {listen_addr}"))?;
+    tracing::info!("wardn serve listening on {listen_addr}");
+    axum::serve(listener, wardn::app(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
