@@ -13,7 +13,7 @@ jobs:
       pull-requests: read
       checks: write
       packages: write
-    uses: oxHive/pipelines/.github/workflows/rust-release.yml@main
+    uses: oxHive/pipelines/.github/workflows/rust-release.yml@v2
     with:
       package-name: wardn
       binary-name: wardn
