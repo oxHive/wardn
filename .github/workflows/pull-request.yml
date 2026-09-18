@@ -7,7 +7,6 @@ on:
 
 jobs:
   ci:
-    uses: oxHive/pipelines/.github/workflows/rust-check.yml@v2
-    with:
-      upload-coverage: true
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oxHive/pipelines/.github/actions/rust-check@v2
