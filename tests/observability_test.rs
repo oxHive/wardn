@@ -2,12 +2,12 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use wardn::auth::AppState;
-use wardn::db;
-use wardn::observability;
 use std::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::AppState;
+use wardn::db;
+use wardn::observability;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -27,10 +27,14 @@ fn admin_url() -> String {
 async fn metrics_endpoint_requires_valid_bearer_token() {
     let pool = test_pool().await;
     let handle = common::metrics_handle();
-    let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-        .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle)
-        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
+    let state = AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url())
+    .with_metrics_handle(handle)
+    .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = wardn::app(state);
 
     // No Authorization header at all — rejected by metrics_handler's own
@@ -93,7 +97,12 @@ async fn metrics_endpoint_requires_valid_bearer_token() {
 #[tokio::test]
 async fn metrics_endpoint_rejects_when_token_unset() {
     let pool = test_pool().await;
-    let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     // No Authorization header at all.
@@ -165,10 +174,14 @@ async fn delete_namespace(name: &str) {
 async fn successful_request_increments_counter_and_histogram() {
     let pool = test_pool().await;
     let handle = common::metrics_handle();
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-        .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle.clone())
-        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url())
+    .with_metrics_handle(handle.clone())
+    .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = wardn::app(state);
 
     let (user_id, api_key) =
@@ -225,9 +238,10 @@ async fn successful_request_increments_counter_and_histogram() {
          increase by exactly 1: {rendered}"
     );
     assert!(
-        !rendered.contains("gateway_proxy_requests_total{") || !rendered.lines().any(|line| {
-            line.starts_with("gateway_proxy_requests_total{") && line.contains("namespace=")
-        }),
+        !rendered.contains("gateway_proxy_requests_total{")
+            || !rendered.lines().any(|line| {
+                line.starts_with("gateway_proxy_requests_total{") && line.contains("namespace=")
+            }),
         "gateway_proxy_requests_total must not carry a namespace label: {rendered}"
     );
     let histogram_count_after = common::extract_labeled_metric(
@@ -252,10 +266,14 @@ async fn successful_request_increments_counter_and_histogram() {
 async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
     let pool = test_pool().await;
     let handle = common::metrics_handle();
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-        .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle.clone())
-        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url())
+    .with_metrics_handle(handle.clone())
+    .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = wardn::app(state);
 
     let (user_id, api_key) =
@@ -319,10 +337,14 @@ async fn in_flight_gauge_returns_to_baseline_after_request_completes() {
 async fn metrics_endpoint_reports_pg_pool_gauges() {
     let pool = test_pool().await;
     let handle = common::metrics_handle();
-    let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-        .with_sqld_admin_url(admin_url())
-        .with_metrics_handle(handle)
-        .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
+    let state = AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url())
+    .with_metrics_handle(handle)
+    .with_metrics_token(common::TEST_METRICS_TOKEN.to_string());
     let app = wardn::app(state);
 
     let resp = app

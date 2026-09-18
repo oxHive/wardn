@@ -2,9 +2,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use tower::ServiceExt;
 use wardn::AppState;
 use wardn::db;
-use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -19,7 +19,11 @@ fn test_sqld_url() -> String {
 #[tokio::test]
 async fn healthz_returns_ok() {
     let pool = test_pool().await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()

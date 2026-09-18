@@ -2,9 +2,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use tower::ServiceExt;
 use wardn::auth::AppState;
 use wardn::db;
-use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -75,23 +75,37 @@ async fn create_org(app: axum::Router, owner_key: &str, name: &str) -> String {
 /// invite a second member with in tests that don't care which specific
 /// permissions the invited member ends up with.
 async fn bootstrap_role_id(pool: &sqlx::PgPool, org_id: uuid::Uuid) -> uuid::Uuid {
-    let (role_id,): (uuid::Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE org_id = $1 LIMIT 1")
-        .bind(org_id)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+    let (role_id,): (uuid::Uuid,) =
+        sqlx::query_as("SELECT id FROM roles WHERE org_id = $1 LIMIT 1")
+            .bind(org_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     role_id
 }
 
 #[tokio::test]
 async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
 
     let invitee_email = format!("invitee-{}@example.com", uuid::Uuid::new_v4());
@@ -170,12 +184,22 @@ async fn add_member_lets_the_invited_user_reach_the_orgs_namespace() {
 #[tokio::test]
 async fn list_members_shows_the_owner_and_the_invited_member() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     let owner_email = format!("owner-{}@example.com", uuid::Uuid::new_v4());
     let (owner_id, owner_key) = register(app.clone(), &owner_email).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -216,7 +240,11 @@ async fn list_members_shows_the_owner_and_the_invited_member() {
         .unwrap();
     let members: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let members = members.as_array().unwrap();
-    assert_eq!(members.len(), 2, "expected the owner plus the invitee: {members:?}");
+    assert_eq!(
+        members.len(),
+        2,
+        "expected the owner plus the invitee: {members:?}"
+    );
 
     let find = |id: uuid::Uuid| {
         members
@@ -230,7 +258,10 @@ async fn list_members_shows_the_owner_and_the_invited_member() {
     assert_eq!(owner_row["role_id"].as_str().unwrap(), role_id.to_string());
     let invitee_row = find(invitee_id);
     assert_eq!(invitee_row["email"].as_str().unwrap(), invitee_email);
-    assert_eq!(invitee_row["role_id"].as_str().unwrap(), role_id.to_string());
+    assert_eq!(
+        invitee_row["role_id"].as_str().unwrap(),
+        role_id.to_string()
+    );
 
     delete_namespace(&org_id_str).await;
 }
@@ -238,17 +269,33 @@ async fn list_members_shows_the_owner_and_the_invited_member() {
 #[tokio::test]
 async fn list_members_rejects_a_caller_without_permission() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
 
     // A registered user who was never invited to this org at all.
-    let (_outsider_id, outsider_key) =
-        register(app.clone(), &format!("outsider-{}@example.com", uuid::Uuid::new_v4())).await;
+    let (_outsider_id, outsider_key) = register(
+        app.clone(),
+        &format!("outsider-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -268,12 +315,25 @@ async fn list_members_rejects_a_caller_without_permission() {
 #[tokio::test]
 async fn add_member_accepts_a_differently_cased_email() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -335,12 +395,25 @@ async fn add_member_accepts_a_differently_cased_email() {
 #[tokio::test]
 async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -420,7 +493,9 @@ async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
                 .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-org-id", &org_id_str)
-                .body(Body::from(r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#))
+                .body(Body::from(
+                    r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -482,7 +557,9 @@ async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
                 .header(header::AUTHORIZATION, format!("Bearer {registration_key}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-org-id", &org_id_str)
-                .body(Body::from(r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#))
+                .body(Body::from(
+                    r#"{"statements":["SELECT v FROM kv WHERE k = 'seam'"]}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -504,12 +581,25 @@ async fn a_members_self_minted_key_reaches_the_org_until_it_is_revoked() {
 #[tokio::test]
 async fn add_member_rejects_an_unregistered_email() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -536,12 +626,25 @@ async fn add_member_rejects_an_unregistered_email() {
 #[tokio::test]
 async fn add_member_rejects_a_duplicate_invite() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -585,12 +688,25 @@ async fn add_member_rejects_a_duplicate_invite() {
 #[tokio::test]
 async fn remove_member_revokes_org_access_but_not_the_personal_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
     let role_id = bootstrap_role_id(&pool, org_id).await;
 
@@ -675,12 +791,25 @@ async fn remove_member_revokes_org_access_but_not_the_personal_key() {
 #[tokio::test]
 async fn remove_member_returns_404_for_a_non_member() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", uuid::Uuid::new_v4())).await;
-    let org_id_str = create_org(app.clone(), &owner_key, &format!("Org-{}", uuid::Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let org_id_str = create_org(
+        app.clone(),
+        &owner_key,
+        &format!("Org-{}", uuid::Uuid::new_v4()),
+    )
+    .await;
     let org_id: uuid::Uuid = org_id_str.parse().unwrap();
 
     let resp = app

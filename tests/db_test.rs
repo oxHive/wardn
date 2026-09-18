@@ -1,5 +1,5 @@
-use wardn::db;
 use uuid::Uuid;
+use wardn::db;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -12,14 +12,12 @@ async fn find_api_key_by_prefix_returns_seeded_row() {
     let pool = test_pool().await;
     let owner_id = Uuid::new_v4();
     let prefix = format!("t{}", owner_id.simple())[..12].to_string();
-    sqlx::query(
-        "INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(owner_id)
-    .bind(format!("test-{owner_id}@example.com"))
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(owner_id)
+        .bind(format!("test-{owner_id}@example.com"))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",
@@ -83,9 +81,9 @@ async fn malformed_sqld_namespace_is_rejected_by_the_database() {
         .execute(&pool)
         .await;
 
-        let err = result
-            .err()
-            .unwrap_or_else(|| panic!("inserting sqld_namespace {bad:?} should have been rejected"));
+        let err = result.err().unwrap_or_else(|| {
+            panic!("inserting sqld_namespace {bad:?} should have been rejected")
+        });
         assert!(
             err.to_string().contains("sqld_namespace_format"),
             "sqld_namespace {bad:?} was rejected, but not by the format CHECK constraint: {err}"

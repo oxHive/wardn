@@ -3,14 +3,14 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use bytes::Bytes;
-use wardn::auth::AppState;
-use wardn::db;
 use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::AppState;
+use wardn::db;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -90,11 +90,19 @@ async fn create_org(app: axum::Router, owner_key: &str, name: &str) -> String {
 #[tokio::test]
 async fn successful_query_request_emits_a_usage_event() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, api_key) =
-        register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
+    let (user_id, api_key) = register(
+        app.clone(),
+        &format!("usage-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
 
     let (resp, events) = common::capture_usage_events(|| {
         app.oneshot(
@@ -144,11 +152,19 @@ async fn successful_query_request_emits_a_usage_event() {
 #[tokio::test]
 async fn rejected_request_does_not_emit_a_usage_event() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, api_key) =
-        register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
+    let (user_id, api_key) = register(
+        app.clone(),
+        &format!("usage-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
 
     let ((rejected, accepted), events) = common::capture_usage_events(|| async {
         let rejected = app
@@ -225,27 +241,40 @@ async fn response_head_timeout_emits_a_504_usage_event() {
     // Only the *proxy* leg points at the black hole; `sqld_admin_url` stays
     // real, since registration provisions the namespace through it.
     let (black_hole, mut accepted) = spawn_black_hole_sqld().await;
-    let state = AppState::new(pool.clone(), black_hole, common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        black_hole,
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, api_key) =
-        register(app.clone(), &format!("usage-{}@example.com", Uuid::new_v4())).await;
+    let (user_id, api_key) = register(
+        app.clone(),
+        &format!("usage-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
 
     let (resp, events) = common::capture_usage_events(|| async {
-        let request = tokio::spawn(app.clone().oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/")
-                .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
-                .unwrap(),
-        ));
+        let request = tokio::spawn(
+            app.clone().oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
+                    .unwrap(),
+            ),
+        );
 
         // Wait until the proxy has actually opened its connection to the black
         // hole: that means auth and namespace resolution — real Postgres I/O —
         // are done, and `RESPONSE_HEAD_TIMEOUT`'s timer is armed.
-        accepted.recv().await.expect("proxy never connected to sqld");
+        accepted
+            .recv()
+            .await
+            .expect("proxy never connected to sqld");
 
         // Only now switch to virtual time. From here the runtime has nothing
         // left to poll (the black hole will never answer), so tokio jumps the
@@ -277,11 +306,19 @@ async fn response_head_timeout_emits_a_504_usage_event() {
 #[tokio::test]
 async fn org_shared_request_emits_org_id_field() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (_owner_id, owner_key) =
-        register(app.clone(), &format!("owner-{}@example.com", Uuid::new_v4())).await;
+    let (_owner_id, owner_key) = register(
+        app.clone(),
+        &format!("owner-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
     let org_id = create_org(app.clone(), &owner_key, &format!("Org-{}", Uuid::new_v4())).await;
 
     let (resp, events) = common::capture_usage_events(|| {
@@ -300,7 +337,11 @@ async fn org_shared_request_emits_org_id_field() {
     let resp = resp.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    assert_eq!(events.len(), 1, "expected exactly one usage event: {events:?}");
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one usage event: {events:?}"
+    );
     let event = &events[0];
     assert_eq!(event["org_id"], org_id);
     assert_eq!(event["namespace"], org_id);
@@ -319,7 +360,12 @@ async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = wardn::app(
-        AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url()),
+        AppState::new(
+            pool,
+            test_sqld_url(),
+            common::TEST_API_KEY_PEPPER.to_string(),
+        )
+        .with_sqld_admin_url(admin_url()),
     );
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -371,7 +417,8 @@ async fn sync_request_emits_protocol_sync() {
     .execute(&pool)
     .await
     .unwrap();
-    let (full_key, prefix, hash) = wardn::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
+    let (full_key, prefix, hash) =
+        wardn::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'user', $2, $3, $4)",

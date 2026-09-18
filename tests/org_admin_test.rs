@@ -2,11 +2,11 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use tower::ServiceExt;
+use uuid::Uuid;
 use wardn::auth::{self, AppState};
 use wardn::db;
 use wardn::roles::{self, Permission};
-use tower::ServiceExt;
-use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -77,7 +77,11 @@ async fn seed_admin(pool: &sqlx::PgPool, permissions: &[Permission]) -> (Uuid, S
 async fn create_role_succeeds_for_an_org_manage_roles_holder() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -100,7 +104,11 @@ async fn create_role_succeeds_for_an_org_manage_roles_holder() {
 async fn create_role_is_forbidden_without_org_manage_roles() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::DbQuery]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -159,7 +167,11 @@ async fn workspace_owned_key_is_forbidden_from_the_admin_api() {
     .await
     .unwrap();
 
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()
@@ -183,7 +195,11 @@ async fn workspace_owned_key_is_forbidden_from_the_admin_api() {
 async fn create_role_rejects_a_duplicate_name_with_409() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let name = format!("dupe-{}", Uuid::new_v4());
     let body = format!(r#"{{"name":"{name}","permissions":["db:query"]}}"#);
 
@@ -225,7 +241,11 @@ async fn create_role_rejects_a_duplicate_name_with_409() {
 async fn duplicate_permissions_in_the_body_are_deduped_not_a_500() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let name = format!("deduped-{}", Uuid::new_v4());
 
     let create_resp = app
@@ -281,7 +301,11 @@ async fn duplicate_permissions_in_the_body_are_deduped_not_a_500() {
 async fn create_role_rejects_an_unknown_permission_string() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -302,7 +326,11 @@ async fn create_role_rejects_an_unknown_permission_string() {
 async fn list_roles_returns_created_roles() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -327,7 +355,11 @@ async fn list_roles_returns_created_roles() {
 async fn update_role_replaces_its_permissions() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let create_resp = app
         .clone()
@@ -369,7 +401,11 @@ async fn update_role_replaces_its_permissions() {
 async fn update_role_returns_404_for_an_unknown_role_id() {
     let pool = test_pool().await;
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -392,7 +428,11 @@ async fn delete_role_rejects_a_role_still_in_use() {
     let (org_id, key) = seed_admin(&pool, &[Permission::OrgManageRoles]).await;
     // seed_admin's own bootstrap role is held by the admin themselves.
     let role_id = roles::list_roles(&pool, org_id).await.unwrap()[0].id;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let resp = app
         .oneshot(
@@ -441,7 +481,11 @@ async fn assign_member_role_succeeds_for_an_org_manage_members_holder() {
         .await
         .unwrap();
 
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()
@@ -469,7 +513,11 @@ async fn assign_member_role_returns_404_for_an_unknown_member() {
         .await
         .unwrap();
 
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()

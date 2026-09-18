@@ -112,7 +112,8 @@ impl Visit for FieldVisitor {
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name().to_string(), format!("{value:?}"));
+        self.0
+            .insert(field.name().to_string(), format!("{value:?}"));
     }
 }
 
@@ -203,7 +204,11 @@ pub fn extract_unlabeled_metric(rendered: &str, metric_name: &str) -> f64 {
 /// contains every string in `must_contain` (e.g. `["namespace=\"...\"",
 /// "protocol=\"query\""]`), and parses its trailing value. `None` if no
 /// matching line exists yet.
-pub fn extract_labeled_metric(rendered: &str, metric_name: &str, must_contain: &[&str]) -> Option<f64> {
+pub fn extract_labeled_metric(
+    rendered: &str,
+    metric_name: &str,
+    must_contain: &[&str],
+) -> Option<f64> {
     let prefix = format!("{metric_name}{{");
     for line in rendered.lines() {
         if !line.starts_with(&prefix) {

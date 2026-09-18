@@ -4,10 +4,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use wardn::auth::{self, AppState, AuthedOwner};
-use wardn::{db, routing};
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::{self, AppState, AuthedOwner};
+use wardn::{db, routing};
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -30,14 +30,26 @@ fn test_app(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/whereami", get(whereami))
         .layer(axum::middleware::from_fn_with_state(
-            AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()),
+            AppState::new(
+                pool.clone(),
+                test_sqld_url(),
+                common::TEST_API_KEY_PEPPER.to_string(),
+            ),
             auth::auth_middleware,
         ))
-        .with_state(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()))
+        .with_state(AppState::new(
+            pool,
+            test_sqld_url(),
+            common::TEST_API_KEY_PEPPER.to_string(),
+        ))
 }
 
 async fn seed_valid_key(pool: &sqlx::PgPool, owner_type: &str, owner_id: Uuid) -> String {
-    let user_id = if owner_type == "user" { owner_id } else { Uuid::new_v4() };
+    let user_id = if owner_type == "user" {
+        owner_id
+    } else {
+        Uuid::new_v4()
+    };
     sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(user_id)
         .bind(format!("route-{user_id}@example.com"))

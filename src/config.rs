@@ -24,8 +24,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Config> {
-        let metrics_token =
-            std::env::var("METRICS_TOKEN").context("METRICS_TOKEN must be set")?;
+        let metrics_token = std::env::var("METRICS_TOKEN").context("METRICS_TOKEN must be set")?;
         if metrics_token.is_empty() {
             anyhow::bail!(
                 "METRICS_TOKEN must not be empty — an empty value fails closed and permanently \
@@ -52,7 +51,9 @@ impl Config {
             api_key_pepper,
             otel_exporter_otlp_endpoint: std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
             loki_url: std::env::var("LOKI_URL").ok(),
-            console_origins: parse_console_origins(std::env::var("CONSOLE_ORIGINS").ok().as_deref()),
+            console_origins: parse_console_origins(
+                std::env::var("CONSOLE_ORIGINS").ok().as_deref(),
+            ),
         })
     }
 }
@@ -75,7 +76,11 @@ pub fn parse_console_origins(raw: Option<&str>) -> Vec<String> {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            if origins.is_empty() { default() } else { origins }
+            if origins.is_empty() {
+                default()
+            } else {
+                origins
+            }
         }
     }
 }
@@ -86,12 +91,18 @@ mod tests {
 
     #[test]
     fn unset_falls_back_to_local_console_dev_server() {
-        assert_eq!(parse_console_origins(None), vec!["http://localhost:5173".to_string()]);
+        assert_eq!(
+            parse_console_origins(None),
+            vec!["http://localhost:5173".to_string()]
+        );
     }
 
     #[test]
     fn empty_string_falls_back_to_the_same_default() {
-        assert_eq!(parse_console_origins(Some("")), vec!["http://localhost:5173".to_string()]);
+        assert_eq!(
+            parse_console_origins(Some("")),
+            vec!["http://localhost:5173".to_string()]
+        );
     }
 
     #[test]

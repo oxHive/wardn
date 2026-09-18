@@ -119,7 +119,10 @@ pub struct RoleWithPermissions {
 /// contiguous — true only because `roles.name` is unique per `org_id`
 /// (`UNIQUE (org_id, name)`, `migrations/0003_org_roles.sql`), so no other
 /// role can sort between two rows sharing the same `id`.
-pub async fn list_roles(pool: &PgPool, org_id: Uuid) -> Result<Vec<RoleWithPermissions>, sqlx::Error> {
+pub async fn list_roles(
+    pool: &PgPool,
+    org_id: Uuid,
+) -> Result<Vec<RoleWithPermissions>, sqlx::Error> {
     let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT r.id, r.name, rp.permission
          FROM roles r

@@ -62,7 +62,9 @@ const GRPC_PATH_PREFIXES: [&str; 1] = ["/wal_log."];
 /// [`has_suspicious_path_encoding`] for why matching on that raw string is
 /// safe only as long as it stays identical to what gets forwarded to sqld.
 fn is_grpc_path(path: &str) -> bool {
-    GRPC_PATH_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+    GRPC_PATH_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
 }
 
 /// `true` if `path` contains a `.`/`..` path segment or a `%` (the start of
@@ -76,7 +78,10 @@ fn is_grpc_path(path: &str) -> bool {
 /// normalizes or decodes `path` before this point, this assumption (and this
 /// check) need to be re-examined.
 fn has_suspicious_path_encoding(path: &str) -> bool {
-    path.contains('%') || path.split('/').any(|segment| segment == "." || segment == "..")
+    path.contains('%')
+        || path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
 }
 
 /// RFC 9110 §7.6.1 connection-specific ("hop-by-hop") header fields. A proxy
@@ -295,7 +300,12 @@ pub async fn proxy_handler(
     // impossible to insert in the first place; this is the belt to its braces.
     let mut headers = forwardable_headers(
         &parts.headers,
-        &[header::AUTHORIZATION, header::HOST, X_NAMESPACE_BIN, X_ORG_ID],
+        &[
+            header::AUTHORIZATION,
+            header::HOST,
+            X_NAMESPACE_BIN,
+            X_ORG_ID,
+        ],
     );
     let namespace_bin = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&namespace);
     let Ok(namespace_bin_value) = HeaderValue::from_str(&namespace_bin) else {
@@ -448,11 +458,7 @@ pub async fn proxy_handler(
     );
 
     emit_usage_event(upstream_parts.status);
-    crate::observability::record_proxy_metrics(
-        protocol,
-        upstream_parts.status,
-        start.elapsed(),
-    );
+    crate::observability::record_proxy_metrics(protocol, upstream_parts.status, start.elapsed());
 
     // `Body::new` keeps the upstream body as a stream *and* passes its trailer
     // frame through — gRPC carries its `grpc-status`/`grpc-message` in HTTP/2
@@ -560,7 +566,9 @@ mod tests {
     /// dot-segments RFC 3986 §3.3/§5.2.4 normalization would remove.
     #[test]
     fn single_dot_segment_is_suspicious() {
-        assert!(has_suspicious_path_encoding("/./wal_log.ReplicationLog/Hello"));
+        assert!(has_suspicious_path_encoding(
+            "/./wal_log.ReplicationLog/Hello"
+        ));
     }
 
     /// Percent-encoding (e.g. `%2e%2e` decoding to `..`) is refused outright
@@ -568,7 +576,9 @@ mod tests {
     /// decodes the path, so any `%` here is already an unclassifiable input.
     #[test]
     fn percent_encoded_path_is_suspicious() {
-        assert!(has_suspicious_path_encoding("/%2e%2e/wal_log.ReplicationLog/Hello"));
+        assert!(has_suspicious_path_encoding(
+            "/%2e%2e/wal_log.ReplicationLog/Hello"
+        ));
     }
 
     /// The real gRPC replication path this gateway actually proxies today

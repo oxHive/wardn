@@ -35,7 +35,10 @@ pub struct CreateKeyResponse {
 /// `created_at` (same transaction timestamp) still order deterministically;
 /// tests and clients alike treat position 0 as "the oldest/registration key".
 #[tracing::instrument(skip(state))]
-pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
+pub async fn list_keys(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -59,7 +62,10 @@ pub async fn list_keys(State(state): State<AppState>, Extension(owner): Extensio
 /// full key is shown exactly once, exactly like `POST /users`'s
 /// registration response.
 #[tracing::instrument(skip(state))]
-pub async fn create_key(State(state): State<AppState>, Extension(owner): Extension<AuthedOwner>) -> Response {
+pub async fn create_key(
+    State(state): State<AppState>,
+    Extension(owner): Extension<AuthedOwner>,
+) -> Response {
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
