@@ -53,7 +53,7 @@ services:
   wardn:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.multistage
     depends_on:
       - postgres
       - sqld

@@ -12,19 +12,12 @@ jobs:
       contents: write
       pull-requests: read
       checks: write
-    uses: oxHive/pipelines/.github/workflows/rust-release.yml@v2
+      packages: write
+    uses: oxHive/pipelines/.github/workflows/rust-release.yml@main
     with:
-      package-name: oxhivemind
-      binary-name: hivemind
-      dashboard-dir: dashboard
+      package-name: wardn
+      binary-name: wardn
+      publish-homebrew: true
+      homebrew-install: 'bin.install "wardn"'
+      publish-docker: true
     secrets: inherit
-
-  publish-opencode:
-    permissions:
-      contents: read
-      id-token: write
-    uses: oxHive/pipelines/.github/workflows/npm-publish.yml@v2
-    with:
-      package-path: plugins/opencode
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
