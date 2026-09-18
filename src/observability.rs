@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sqlx::PgPool;
+use subtle::ConstantTimeEq;
 
 use crate::auth::AppState;
 
@@ -27,7 +28,16 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    if state.metrics_token.is_empty() || token != Some(state.metrics_token.as_str()) {
+    // Constant-time comparison — same reasoning as `auth::verify_key`'s use
+    // of `Mac::verify_slice`: a plain `==`/`!=` here would let a
+    // network-adjacent attacker recover `METRICS_TOKEN` byte-by-byte via
+    // response timing. `ConstantTimeEq` short-circuits on length only,
+    // which is fine since the token's length isn't the secret.
+    let authorized = token.is_some_and(|t| {
+        !state.metrics_token.is_empty()
+            && bool::from(t.as_bytes().ct_eq(state.metrics_token.as_bytes()))
+    });
+    if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     refresh_pg_pool_gauges(&state.pool);
@@ -130,13 +140,12 @@ pub fn record_provisioning_outcome(outcome: &'static str) {
 /// batch-limited row count, so the gauge reflects the true queue depth even
 /// when it exceeds one tick's batch size.
 pub async fn refresh_provisioning_outbox_gauges(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let (pending,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM namespace_provisioning_outbox WHERE status = 'pending'",
-    )
-    .fetch_one(pool)
-    .await?;
-    let (failed,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM namespace_provisioning_outbox WHERE status = 'failed'",
+    // One round trip for both counts instead of two — this runs on every
+    // provisioning-worker tick.
+    let (pending, failed): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE status = 'pending'),
+                COUNT(*) FILTER (WHERE status = 'failed')
+         FROM namespace_provisioning_outbox",
     )
     .fetch_one(pool)
     .await?;

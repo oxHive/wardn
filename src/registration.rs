@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AppState, AuthedOwner};
-use crate::org::admin::is_unique_violation;
+use crate::org::admin::is_unique_violation_on;
 use crate::provisioning::{self, OutboxRow};
 use crate::roles;
 
@@ -142,7 +142,14 @@ pub async fn create_user(
             )
                 .into_response()
         }
-        Err(e) if is_unique_violation(&e) => {
+        // Two constraints can raise this: `users_email_key` (the original,
+        // case-sensitive UNIQUE) and `users_email_lower_idx` (the
+        // case-insensitive index added in migration 0005) — either means
+        // the same thing to the caller, a taken email.
+        Err(e)
+            if is_unique_violation_on(&e, "users_email_key")
+                || is_unique_violation_on(&e, "users_email_lower_idx") =>
+        {
             (StatusCode::CONFLICT, "email already registered").into_response()
         }
         Err(e) => {
@@ -162,6 +169,23 @@ pub struct CreateOrgResponse {
     pub org_id: Uuid,
 }
 
+/// Maximum orgs a single user may create. This project has no billing/plan
+/// tiers yet to derive a real number from — 10 is a conservative ceiling
+/// against runaway namespace creation, not a product decision about how many
+/// orgs a legitimate customer needs.
+const ORG_QUOTA_PER_USER: i64 = 10;
+
+enum CreateOrgError {
+    QuotaExceeded,
+    Db(sqlx::Error),
+}
+
+impl From<sqlx::Error> for CreateOrgError {
+    fn from(err: sqlx::Error) -> Self {
+        CreateOrgError::Db(err)
+    }
+}
+
 /// Inserts the new org, a bootstrap `owner` role holding every permission in
 /// the catalog, the creator's membership in that role, and the org's
 /// provisioning outbox row — all in one transaction. Reuses
@@ -169,18 +193,37 @@ pub struct CreateOrgResponse {
 /// than duplicating it, but can't reuse `roles::create_role` itself since
 /// that function opens its own transaction and this one needs everything
 /// atomic with the org insert.
+///
+/// The `ORG_QUOTA_PER_USER` check also happens inside this transaction, after
+/// a transaction-scoped advisory lock keyed on `creator_user_id`: without the
+/// lock, the count-then-insert is check-then-act, so concurrent `POST /orgs`
+/// calls from the same user could all observe a count under the quota and
+/// all insert, exceeding it. The lock serializes concurrent callers with the
+/// same `creator_user_id` and is released automatically on commit or
+/// rollback, so an early return (e.g. `QuotaExceeded`) can't leak it.
 #[tracing::instrument(skip(pool))]
 async fn insert_org(
     pool: &PgPool,
     name: &str,
     creator_user_id: Uuid,
-) -> Result<(Uuid, OutboxRow), sqlx::Error> {
+) -> Result<(Uuid, OutboxRow), CreateOrgError> {
     let org_id = Uuid::new_v4();
     let role_id = Uuid::new_v4();
     let outbox_id = Uuid::new_v4();
     let namespace = org_id.to_string();
 
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
+        .bind(creator_user_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM orgs WHERE created_by = $1")
+        .bind(creator_user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if count >= ORG_QUOTA_PER_USER {
+        return Err(CreateOrgError::QuotaExceeded);
+    }
     sqlx::query("INSERT INTO orgs (id, name, created_by) VALUES ($1, $2, $3)")
         .bind(org_id)
         .bind(name)
@@ -222,12 +265,6 @@ async fn insert_org(
     ))
 }
 
-/// Maximum orgs a single user may create. This project has no billing/plan
-/// tiers yet to derive a real number from — 10 is a conservative ceiling
-/// against runaway namespace creation (finding #3/#4), not a product
-/// decision about how many orgs a legitimate customer needs.
-const ORG_QUOTA_PER_USER: i64 = 10;
-
 /// `POST /orgs` — authenticated (goes through `auth_middleware` normally,
 /// reads the caller via the `AuthedOwner` extension). Only a personal
 /// (`owner_type == "user"`) key may create an org — a workspace/org-owned
@@ -246,21 +283,6 @@ pub async fn create_org(
     if owner.owner_type != "user" {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let owned_org_count: Result<(i64,), sqlx::Error> =
-        sqlx::query_as("SELECT COUNT(*) FROM orgs WHERE created_by = $1")
-            .bind(owner.owner_id)
-            .fetch_one(&state.pool)
-            .await;
-    match owned_org_count {
-        Ok((count,)) if count >= ORG_QUOTA_PER_USER => {
-            return StatusCode::TOO_MANY_REQUESTS.into_response();
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::error!("org quota check failed: {e:#}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }
     match insert_org(&state.pool, &req.name, owner.owner_id).await {
         Ok((org_id, outbox_row)) => {
             if let Err(e) = provisioning::attempt_provisioning(
@@ -274,7 +296,8 @@ pub async fn create_org(
             }
             (StatusCode::CREATED, Json(CreateOrgResponse { org_id })).into_response()
         }
-        Err(e) => {
+        Err(CreateOrgError::QuotaExceeded) => StatusCode::TOO_MANY_REQUESTS.into_response(),
+        Err(CreateOrgError::Db(e)) => {
             tracing::error!("create org failed: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
