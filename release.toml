@@ -9,21 +9,3 @@ publish = false                                            # crates.io publish i
 tag = true
 tag-name = "v{{version}}"
 pre-release-commit-message = "chore: release v{{version}}"
-
-[[pre-release-replacements]]
-file = ".claude-plugin/plugin.json"
-search = "\"version\": \"[^\"]+\""
-replace = "\"version\": \"{{version}}\""
-exactly = 1
-
-[[pre-release-replacements]]
-file = "plugins/opencode/package.json"
-search = "\"version\": \"[^\"]+\""
-replace = "\"version\": \"{{version}}\""
-exactly = 1
-
-[[pre-release-replacements]]
-file = "dashboard/package.json"
-search = "\"version\": \"[^\"]+\""
-replace = "\"version\": \"{{version}}\""
-exactly = 1
