@@ -4,10 +4,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::get;
 use axum::{Extension, Router};
-use wardn::auth::{self, AppState, AuthedOwner};
-use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::{self, AppState, AuthedOwner};
+use wardn::db;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -27,10 +27,18 @@ fn test_app(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/whoami", get(whoami))
         .layer(axum::middleware::from_fn_with_state(
-            AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()),
+            AppState::new(
+                pool.clone(),
+                test_sqld_url(),
+                common::TEST_API_KEY_PEPPER.to_string(),
+            ),
             wardn::auth::auth_middleware,
         ))
-        .with_state(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()))
+        .with_state(AppState::new(
+            pool,
+            test_sqld_url(),
+            common::TEST_API_KEY_PEPPER.to_string(),
+        ))
 }
 
 #[tokio::test]
@@ -82,7 +90,12 @@ async fn missing_key_returns_401() {
     let pool = test_pool().await;
     let app = test_app(pool);
     let resp = app
-        .oneshot(Request::builder().uri("/whoami").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/whoami")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

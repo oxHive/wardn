@@ -1,9 +1,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use wardn::auth::AppState;
-use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::AppState;
+use wardn::db;
 
 mod common;
 
@@ -22,7 +22,11 @@ fn admin_url() -> String {
 }
 
 fn test_state(pool: sqlx::PgPool) -> AppState {
-    AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
+    AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
 }
 
 async fn delete_namespace(name: &str) {
@@ -59,7 +63,12 @@ async fn register(app: axum::Router, email: &str) -> (Uuid, String) {
 #[tokio::test]
 async fn create_user_returns_a_working_key_and_provisions_a_namespace() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     let email = format!("register-{}@example.com", uuid::Uuid::new_v4());
@@ -144,8 +153,12 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
     let _lock = common::lock_outbox(&pool).await;
     // Unreachable admin URL — the inline attempt inside create_user must
     // fail without failing the request itself.
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-        .with_sqld_admin_url("http://127.0.0.1:1".to_string());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url("http://127.0.0.1:1".to_string());
     let app = wardn::app(state);
 
     let email = format!("register-fail-{}@example.com", uuid::Uuid::new_v4());
@@ -186,7 +199,12 @@ async fn create_user_still_succeeds_when_inline_provisioning_fails() {
 #[tokio::test]
 async fn create_user_with_an_already_registered_email_returns_409() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     let email = format!("dupe-{}@example.com", uuid::Uuid::new_v4());
@@ -250,7 +268,12 @@ async fn seed_registered_user(app: axum::Router) -> (uuid::Uuid, String) {
 #[tokio::test]
 async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     let (_user_id, api_key) = seed_registered_user(app.clone()).await;
@@ -334,10 +357,20 @@ async fn create_org_provisions_a_namespace_and_makes_the_creator_its_owner() {
 #[tokio::test]
 async fn create_user_rejects_invalid_email() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    );
     let app = wardn::app(state);
 
-    for bad_email in ["", "not-an-email", "@example.com", "foo@", "foo@@example.com"] {
+    for bad_email in [
+        "",
+        "not-an-email",
+        "@example.com",
+        "foo@",
+        "foo@@example.com",
+    ] {
         let resp = app
             .clone()
             .oneshot(
@@ -361,7 +394,11 @@ async fn create_user_rejects_invalid_email() {
 #[tokio::test]
 async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    );
     let app = wardn::app(state);
     let email = format!("MixedCase-{}@Example.com", uuid::Uuid::new_v4());
 
@@ -400,7 +437,12 @@ async fn create_user_normalizes_email_case_and_rejects_case_variant_duplicates()
 #[tokio::test]
 async fn create_org_is_forbidden_for_a_non_user_owned_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
     // A workspace-owned key: real row, valid hash, but owner_type != "user".
@@ -418,7 +460,8 @@ async fn create_org_is_forbidden_for_a_non_user_owned_key() {
         .execute(&pool)
         .await
         .unwrap();
-    let (full_key, prefix, hash) = wardn::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
+    let (full_key, prefix, hash) =
+        wardn::auth::generate_api_key(common::TEST_API_KEY_PEPPER.as_bytes());
     sqlx::query(
         "INSERT INTO api_keys (id, user_id, owner_type, owner_id, prefix, key_hash)
          VALUES ($1, $2, 'workspace', $3, $4, $5)",
@@ -537,8 +580,11 @@ async fn create_org_is_capped_per_user() {
     let pool = test_pool().await;
     let _lock = common::lock_outbox(&pool).await;
     let app = wardn::app(test_state(pool.clone()));
-    let (user_id, api_key) =
-        register(app.clone(), &format!("orgquota-{}@example.com", Uuid::new_v4())).await;
+    let (user_id, api_key) = register(
+        app.clone(),
+        &format!("orgquota-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
 
     let mut org_ids = Vec::new();
     // The cap is 10 (see src/registration.rs's ORG_QUOTA_PER_USER) — create
@@ -558,7 +604,11 @@ async fn create_org_is_capped_per_user() {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED, "org {i} should have succeeded");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "org {i} should have succeeded"
+        );
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -606,8 +656,11 @@ async fn org_membership_via_an_owner_named_role_does_not_count_against_the_quota
     let app = wardn::app(test_state(pool.clone()));
 
     // The "victim": a plain registered user who never creates anything.
-    let (victim_id, victim_key) =
-        register(app.clone(), &format!("victim-{}@example.com", Uuid::new_v4())).await;
+    let (victim_id, victim_key) = register(
+        app.clone(),
+        &format!("victim-{}@example.com", Uuid::new_v4()),
+    )
+    .await;
 
     // Seed an org the victim did not create, and drop them into it under a
     // role literally named `owner` — the same shape `add_member` +

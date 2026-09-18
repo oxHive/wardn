@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use wardn::{AppState, app, config::Config, db, observability, provisioning, telemetry};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
+use wardn::{AppState, app, config::Config, db, observability, provisioning, telemetry};
 
 /// How often the background provisioning worker retries pending outbox
 /// rows. See `docs/superpowers/specs/2026-08-12-database-provisioning-design.md`.

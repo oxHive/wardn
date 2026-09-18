@@ -17,6 +17,10 @@ use crate::roles;
 /// local and domain parts, no control characters or whitespace. Returns the
 /// normalized (lowercased) form on success, or the 400 response to return
 /// directly on failure.
+// `Response` as the error type is the idiom for "the 4xx to return as-is" in
+// an axum handler helper — called once per request, never buffered or moved
+// in bulk, so `clippy::result_large_err`'s stack-bloat concern doesn't apply.
+#[allow(clippy::result_large_err)]
 fn validate_and_normalize_email(email: &str) -> Result<String, Response> {
     let bad_request = || (StatusCode::BAD_REQUEST, "invalid email address").into_response();
 
@@ -127,12 +131,9 @@ pub async fn create_user(
     };
     match insert_user(&state.pool, &email, state.api_key_pepper.as_bytes()).await {
         Ok((user_id, api_key, outbox_row)) => {
-            if let Err(e) = provisioning::attempt_provisioning(
-                &state.pool,
-                &state.sqld_admin_url,
-                &outbox_row,
-            )
-            .await
+            if let Err(e) =
+                provisioning::attempt_provisioning(&state.pool, &state.sqld_admin_url, &outbox_row)
+                    .await
             {
                 tracing::error!("inline provisioning attempt failed: {e:#}");
             }
@@ -285,12 +286,9 @@ pub async fn create_org(
     }
     match insert_org(&state.pool, &req.name, owner.owner_id).await {
         Ok((org_id, outbox_row)) => {
-            if let Err(e) = provisioning::attempt_provisioning(
-                &state.pool,
-                &state.sqld_admin_url,
-                &outbox_row,
-            )
-            .await
+            if let Err(e) =
+                provisioning::attempt_provisioning(&state.pool, &state.sqld_admin_url, &outbox_row)
+                    .await
             {
                 tracing::error!("inline provisioning attempt failed: {e:#}");
             }

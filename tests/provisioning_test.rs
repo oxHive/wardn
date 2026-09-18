@@ -1,6 +1,6 @@
+use uuid::Uuid;
 use wardn::db;
 use wardn::provisioning::{self, OutboxRow};
-use uuid::Uuid;
 
 mod common;
 

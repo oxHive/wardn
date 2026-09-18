@@ -42,6 +42,9 @@ pub struct RoleResponse {
 ///
 /// First-seen order is preserved so the 201 body echoes the caller's ordering
 /// rather than a `HashSet`'s arbitrary one.
+// See `registration::validate_and_normalize_email`'s identical `#[allow]`:
+// `Response` as the error type is the idiom here, not a hot-path stack cost.
+#[allow(clippy::result_large_err)]
 fn parse_permissions(raw: &[String]) -> Result<Vec<Permission>, Response> {
     let mut seen = HashSet::new();
     let mut out = Vec::with_capacity(raw.len());
