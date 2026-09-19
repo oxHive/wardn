@@ -28,7 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 anyhow = "1"
 thiserror = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 dirs = "5"
 
 # Observability — gated behind the "observability" feature (on by default)
