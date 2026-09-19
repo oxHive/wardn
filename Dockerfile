@@ -1,20 +1,3 @@
-# Builder
-FROM rust:1-slim-bookworm AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY migrations ./migrations
-COPY src ./src
-
-# sqlx::migrate!("./migrations") embeds the migration SQL into the binary
-# at compile time — migrations/ must exist here, but not in the runtime image.
-RUN cargo build --release --bin wardn
-
-# Runtime
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,7 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --uid 10001 wardn
 
-COPY --from=builder /build/target/release/wardn /usr/local/bin/wardn
+# publish-docker stages the cross-compiled binary here per target arch
+# (dist/linux-amd64, dist/linux-arm64) before invoking buildx — no
+# in-container cargo build, so both platforms build natively without QEMU.
+ARG TARGETARCH
+COPY dist/linux-${TARGETARCH}/wardn /usr/local/bin/wardn
 
 USER wardn
 EXPOSE 8787
