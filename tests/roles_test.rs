@@ -1,7 +1,7 @@
+use uuid::Uuid;
 use wardn::auth::AuthedOwner;
 use wardn::db;
 use wardn::roles::{self, Permission};
-use uuid::Uuid;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")

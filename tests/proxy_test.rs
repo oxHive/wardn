@@ -3,10 +3,10 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine as _;
-use wardn::auth::{self, AppState};
-use wardn::db;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wardn::auth::{self, AppState};
+use wardn::db;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -146,7 +146,11 @@ async fn valid_key_reaches_sqld_and_gets_a_real_response() {
     .await
     .unwrap();
 
-    let state = AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string());
+    let state = AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    );
     let app = wardn::app(state);
 
     // sqld exposes a version endpoint at GET /version on its default HTTP
@@ -199,7 +203,11 @@ async fn namespace_isolation_through_full_router() {
     let secret_a = format!("A-secret-{owner_a_id}");
     let secret_b = format!("B-secret-{owner_b_id}");
 
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     // Owner A creates their table and writes their secret.
     let create_and_insert_a = format!(
@@ -263,7 +271,11 @@ async fn query_with_headers(
         builder = builder.header(*name, value);
     }
     let resp = app
-        .oneshot(builder.body(Body::from(statements_json.to_string())).unwrap())
+        .oneshot(
+            builder
+                .body(Body::from(statements_json.to_string()))
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
@@ -299,7 +311,11 @@ async fn client_cannot_smuggle_a_namespace_selector() {
     let victim_key = seed_owner_with_namespace(&pool, &victim_ns).await;
 
     let victim_secret = format!("VICTIM-{victim_id}");
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
 
     let (status, _) = query_through_gateway(
         app.clone(),
@@ -335,7 +351,11 @@ async fn client_cannot_smuggle_a_namespace_selector() {
 #[tokio::test]
 async fn missing_key_never_reaches_sqld() {
     let pool = test_pool().await;
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()
@@ -371,7 +391,11 @@ async fn valid_key_with_no_mapping_returns_404() {
     .await
     .unwrap();
 
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     let resp = app
         .oneshot(
             Request::builder()

@@ -17,12 +17,12 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use base64::Engine as _;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use wardn::auth::{self, AppState};
-use wardn::db;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use uuid::Uuid;
+use wardn::auth::{self, AppState};
+use wardn::db;
 
 /// A gRPC method on sqld's replication service — the same service hivemind's
 /// embedded-replica sync client calls. An empty length-prefixed message is
@@ -104,7 +104,11 @@ async fn seed_owner(pool: &sqlx::PgPool, namespace: &str) -> String {
 async fn spawn_gateway(pool: sqlx::PgPool) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = wardn::app(AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()));
+    let app = wardn::app(AppState::new(
+        pool,
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    ));
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -212,7 +216,11 @@ async fn grpc_over_h2c_survives_the_proxy() {
         &[("x-namespace-bin", &namespace_bin(&namespace))],
     )
     .await;
-    assert_eq!(direct.status, StatusCode::OK, "direct gRPC call to sqld failed");
+    assert_eq!(
+        direct.status,
+        StatusCode::OK,
+        "direct gRPC call to sqld failed"
+    );
     assert_eq!(
         direct.grpc_status().as_deref(),
         Some("0"),

@@ -2,9 +2,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use tower::ServiceExt;
 use wardn::auth::AppState;
 use wardn::db;
-use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -52,11 +52,19 @@ async fn register(app: axum::Router, email: &str) -> (uuid::Uuid, String) {
 #[tokio::test]
 async fn list_keys_shows_the_registration_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, api_key) =
-        register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
+    let (user_id, api_key) = register(
+        app.clone(),
+        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -84,11 +92,19 @@ async fn list_keys_shows_the_registration_key() {
 #[tokio::test]
 async fn create_key_mints_an_independent_second_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, first_key) =
-        register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
+    let (user_id, first_key) = register(
+        app.clone(),
+        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
 
     let resp = app
         .clone()
@@ -152,11 +168,19 @@ async fn create_key_mints_an_independent_second_key() {
 #[tokio::test]
 async fn revoke_key_stops_only_that_key_from_authenticating() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_id, first_key) =
-        register(app.clone(), &format!("keys-{}@example.com", uuid::Uuid::new_v4())).await;
+    let (user_id, first_key) = register(
+        app.clone(),
+        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
 
     let resp = app
         .clone()
@@ -246,13 +270,24 @@ async fn revoke_key_stops_only_that_key_from_authenticating() {
 #[tokio::test]
 async fn revoke_key_returns_404_for_someone_elses_key() {
     let pool = test_pool().await;
-    let state = AppState::new(pool.clone(), test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string()).with_sqld_admin_url(admin_url());
+    let state = AppState::new(
+        pool.clone(),
+        test_sqld_url(),
+        common::TEST_API_KEY_PEPPER.to_string(),
+    )
+    .with_sqld_admin_url(admin_url());
     let app = wardn::app(state);
 
-    let (user_a_id, key_a) =
-        register(app.clone(), &format!("keys-a-{}@example.com", uuid::Uuid::new_v4())).await;
-    let (user_b_id, key_b) =
-        register(app.clone(), &format!("keys-b-{}@example.com", uuid::Uuid::new_v4())).await;
+    let (user_a_id, key_a) = register(
+        app.clone(),
+        &format!("keys-a-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
+    let (user_b_id, key_b) = register(
+        app.clone(),
+        &format!("keys-b-{}@example.com", uuid::Uuid::new_v4()),
+    )
+    .await;
 
     let resp = app
         .clone()
@@ -269,7 +304,10 @@ async fn revoke_key_returns_404_for_someone_elses_key() {
         .await
         .unwrap();
     let keys: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let key_b_id = keys.as_array().unwrap()[0]["id"].as_str().unwrap().to_string();
+    let key_b_id = keys.as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let resp = app
         .oneshot(

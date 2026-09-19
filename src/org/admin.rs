@@ -42,6 +42,9 @@ pub struct RoleResponse {
 ///
 /// First-seen order is preserved so the 201 body echoes the caller's ordering
 /// rather than a `HashSet`'s arbitrary one.
+// See `registration::validate_and_normalize_email`'s identical `#[allow]`:
+// `Response` as the error type is the idiom here, not a hot-path stack cost.
+#[allow(clippy::result_large_err)]
 fn parse_permissions(raw: &[String]) -> Result<Vec<Permission>, Response> {
     let mut seen = HashSet::new();
     let mut out = Vec::with_capacity(raw.len());
@@ -67,6 +70,19 @@ pub(crate) fn is_unique_violation(err: &sqlx::Error) -> bool {
     err.as_database_error()
         .map(|e| e.is_unique_violation())
         .unwrap_or(false)
+}
+
+/// Like [`is_unique_violation`], but only true when the violation is on
+/// exactly this named constraint or index. Needed wherever the failing
+/// statement runs inside a multi-insert transaction that could violate more
+/// than one unique constraint — `is_unique_violation` alone can't tell a
+/// targeted conflict (e.g. a duplicate email) apart from an unrelated one
+/// raised by the same transaction (e.g. an astronomically rare
+/// `api_keys.prefix` collision in `registration::create_user`), which would
+/// otherwise get mapped to a misleading 409 message.
+pub(crate) fn is_unique_violation_on(err: &sqlx::Error, constraint: &str) -> bool {
+    err.as_database_error()
+        .is_some_and(|e| e.is_unique_violation() && e.constraint() == Some(constraint))
 }
 
 /// Widened the same way `is_unique_violation` is, for `roles::delete_role`
@@ -113,7 +129,7 @@ pub async fn create_role(
             }),
         )
             .into_response(),
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if is_unique_violation_on(&e, "roles_org_id_name_key") => {
             (StatusCode::CONFLICT, "role name already exists in this org").into_response()
         }
         Err(e) => {

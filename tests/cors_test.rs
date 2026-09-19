@@ -2,9 +2,9 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use tower::ServiceExt;
 use wardn::AppState;
 use wardn::db;
-use tower::ServiceExt;
 
 async fn test_pool() -> sqlx::PgPool {
     let url = std::env::var("DATABASE_URL")
@@ -20,8 +20,12 @@ fn test_sqld_url() -> String {
 async fn allowed_origin_gets_the_cors_header() {
     let pool = test_pool().await;
     let app = wardn::app(
-        AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-            .with_cors_origins(vec!["http://localhost:5173".to_string()]),
+        AppState::new(
+            pool,
+            test_sqld_url(),
+            common::TEST_API_KEY_PEPPER.to_string(),
+        )
+        .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
     let resp = app
         .oneshot(
@@ -44,8 +48,12 @@ async fn allowed_origin_gets_the_cors_header() {
 async fn disallowed_origin_gets_no_cors_header() {
     let pool = test_pool().await;
     let app = wardn::app(
-        AppState::new(pool, test_sqld_url(), common::TEST_API_KEY_PEPPER.to_string())
-            .with_cors_origins(vec!["http://localhost:5173".to_string()]),
+        AppState::new(
+            pool,
+            test_sqld_url(),
+            common::TEST_API_KEY_PEPPER.to_string(),
+        )
+        .with_cors_origins(vec!["http://localhost:5173".to_string()]),
     );
     let resp = app
         .oneshot(
