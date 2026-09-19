@@ -3,7 +3,7 @@ services:
   wardn:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.multistage
     environment:
       WARDN_DB_PATH: /data/org.db
       WARDN_LISTEN_ADDR: 0.0.0.0:7787

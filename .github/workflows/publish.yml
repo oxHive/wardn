@@ -12,8 +12,12 @@ jobs:
       contents: write
       pull-requests: read
       checks: write
+      packages: write
     uses: oxHive/pipelines/.github/workflows/rust-release.yml@v2
     with:
       package-name: wardn
       binary-name: wardn
+      publish-homebrew: true
+      homebrew-install: 'bin.install "wardn"'
+      publish-docker: true
     secrets: inherit

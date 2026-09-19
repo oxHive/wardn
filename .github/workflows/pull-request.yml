@@ -7,7 +7,9 @@ on:
 
 jobs:
   ci:
-    uses: oxHive/pipelines/.github/workflows/rust-check.yml@main
-    with:
-      upload-coverage: true
-    secrets: inherit
+    runs-on: ubuntu-latest
+    # wardn's tests each open their own libSQL file via tempfile — no
+    # external database service needed, unlike the old Postgres/sqld-backed
+    # proxy this replaced.
+    steps:
+      - uses: oxHive/pipelines/.github/actions/rust-check@v2

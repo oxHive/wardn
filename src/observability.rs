@@ -8,6 +8,7 @@
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use subtle::ConstantTimeEq;
 
 use crate::serve::AppState;
 
@@ -24,7 +25,12 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    if token != Some(expected) {
+    // Constant-time comparison — a plain `==`/`!=` here would let a
+    // network-adjacent attacker recover the metrics token byte-by-byte via
+    // response timing. `ConstantTimeEq` short-circuits on length only,
+    // which is fine since the token's length isn't the secret.
+    let authorized = token.is_some_and(|t| bool::from(t.as_bytes().ct_eq(expected.as_bytes())));
+    if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if let Ok(members) = crate::members::list(&state.conn).await {
