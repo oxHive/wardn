@@ -8,56 +8,8 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # Every integration test in tests/ needs a live Postgres, and a subset
-    # (namespace provisioning, health checks) needs a live sqld too — see
-    # podman-compose.yml for the equivalent local dev setup. The generic
-    # rust-check composite action (oxHive/pipelines) assumes a
-    # dependency-free crate and starts neither, so this job provides them
-    # itself rather than relying on the shared action to.
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: gateway
-          POSTGRES_PASSWORD: gateway
-          POSTGRES_DB: gateway
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd="pg_isready -U gateway"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-    env:
-      DATABASE_URL: postgres://gateway:gateway@127.0.0.1:5433/gateway
-      SQLD_URL: http://127.0.0.1:8081
-      SQLD_ADMIN_URL: http://127.0.0.1:8090
+    # wardn's tests each open their own libSQL file via tempfile — no
+    # external database service needed, unlike the old Postgres/sqld-backed
+    # proxy this replaced.
     steps:
-      # sqld needs --enable-namespaces and custom listen addrs, which
-      # GitHub Actions' native `services:` block can't pass as a command
-      # override (unlike Docker Compose's `command:`) — so it's started
-      # directly instead of declared as a service.
-      - name: Start sqld
-        run: |
-          docker run -d --name sqld \
-            -p 127.0.0.1:8081:8080 \
-            -p 127.0.0.1:8090:8090 \
-            ghcr.io/tursodatabase/libsql-server:latest \
-            sqld --http-listen-addr=0.0.0.0:8080 --enable-namespaces --admin-listen-addr=0.0.0.0:8090
-
-          ready=false
-          for _ in $(seq 1 30); do
-            if curl -s -o /dev/null http://127.0.0.1:8081/; then
-              ready=true
-              break
-            fi
-            sleep 1
-          done
-
-          if [ "$ready" != "true" ]; then
-            echo "sqld did not become ready in time" >&2
-            docker logs sqld
-            exit 1
-          fi
-
       - uses: oxHive/pipelines/.github/actions/rust-check@v2

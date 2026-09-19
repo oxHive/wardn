@@ -2,6 +2,9 @@
 name = "wardn"
 version = "0.1.0"
 edition = "2024"
+description = "Open source org & access layer for Mynd — org, member, and role management, plus the authorization service Mynd calls before touching org-layer memory"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/oxhive/warden"
 
 [lib]
 name = "wardn"
@@ -12,46 +15,59 @@ name = "wardn"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.8"
+libsql = { version = "0.6", features = ["core"] }
 tokio = { version = "1", features = ["full"] }
-tower = { version = "0.5", features = ["util"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "migrate", "uuid", "chrono"] }
-chrono = { version = "0.4", features = ["serde"] }
-hmac = "0.12"
-sha2 = "0.10"
-hex = "0.4"
-rand = "0.8"
-subtle = "2"
-base64 = "0.22"
-hyper = { version = "1", features = ["client", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-http-body-util = "0.1"
-uuid = { version = "1", features = ["v4", "serde"] }
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+axum = "0.7"
+argon2 = "0.5"
 serde = { version = "1", features = ["derive"] }
-# Simple JSON client for sqld's admin API (database provisioning,
-# src/provisioning.rs) — the data-plane proxy itself still uses
-# hyper/hyper-util directly (see src/proxy.rs) for streaming and
-# protocol-accurate HTTP/1.1-vs-h2c forwarding, which reqwest doesn't give
-# fine-grained enough control over.
-reqwest = { version = "0.12", features = ["stream"] }
-metrics = "0.24.6"
-metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
-tower_governor = "0.8.0"
-opentelemetry = "0.32.0"
-opentelemetry_sdk = "0.32.1"
-opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
-tracing-opentelemetry = "0.33.0"
-tracing-loki = "0.2.7"
-url = "2.5.8"
-tower-http = { version = "0.7.0", features = ["trace", "cors"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+anyhow = "1"
+thiserror = "1"
+reqwest = { version = "0.12", features = ["json"] }
+dirs = "5"
+
+# Observability — gated behind the "observability" feature (on by default)
+# so a minimal build (e.g. for a Raspberry Pi, see WARDN_SPECIFICATION.md's
+# Decision 3) can drop OTel/Prometheus/Loki entirely with
+# `--no-default-features`. Even with the feature compiled in, each exporter
+# stays off at runtime unless its env var is set (see src/config.rs) —
+# metrics, tracing export, and log shipping are each independently
+# toggleable, not all-or-nothing.
+metrics = { version = "0.24.6", optional = true }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false, optional = true }
+opentelemetry = { version = "0.32.0", optional = true }
+opentelemetry_sdk = { version = "0.32.1", optional = true }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"], optional = true }
+tracing-opentelemetry = { version = "0.33.0", optional = true }
+tracing-loki = { version = "0.2.7", optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+url = { version = "2.5.8", optional = true }
+# Constant-time bearer-token comparison for GET /metrics — a plain `==`
+# would let a network-adjacent attacker recover the token via timing.
+subtle = { version = "2", optional = true }
+
+[features]
+default = ["observability"]
+observability = [
+  "dep:metrics",
+  "dep:metrics-exporter-prometheus",
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:tracing-opentelemetry",
+  "dep:tracing-loki",
+  "dep:tower-http",
+  "dep:url",
+  "dep:subtle",
+  "tracing-subscriber/json",
+]
 
 [dev-dependencies]
-bytes = "1"
-serde_json = "1"
-# `test-util` gives tests `tokio::time::pause()` — the only way to exercise
-# `proxy.rs`'s 30s `RESPONSE_HEAD_TIMEOUT` without spending 30s. Dev-only, so
-# the shipped binary never carries the mock clock.
-tokio = { version = "1", features = ["test-util"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

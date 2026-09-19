@@ -1,42 +1,49 @@
 version: "3"
 services:
-  postgres:
-    image: postgres:16
+  wardn:
+    build:
+      context: .
+      dockerfile: Dockerfile.multistage
     environment:
-      POSTGRES_USER: gateway
-      POSTGRES_PASSWORD: gateway
-      POSTGRES_DB: gateway
-    # Bound to loopback only: these are unauthenticated-by-default dev
-    # services. Publishing without a bind address exposes them on every
-    # interface.
+      WARDN_DB_PATH: /data/org.db
+      WARDN_LISTEN_ADDR: 0.0.0.0:7787
+      # All three are optional and independently toggleable — unset (the
+      # default) means that piece of observability stays off. Set them to
+      # turn wardn's own exporters on; bring up the "observability" profile
+      # below to have somewhere local for them to go.
+      WARDN_METRICS_TOKEN: ${WARDN_METRICS_TOKEN:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      LOKI_URL: ${LOKI_URL:-}
+    volumes:
+      - wardn-data:/data
+    # Loopback only — wardn serve is an authorization service Mynd calls
+    # locally, not a public API.
     ports:
-      - "127.0.0.1:5433:5432"
-  sqld:
-    image: ghcr.io/tursodatabase/libsql-server:latest
-    command:
-      [
-        "sqld",
-        "--http-listen-addr=0.0.0.0:8080",
-        "--enable-namespaces",
-        "--admin-listen-addr=0.0.0.0:8090",
-      ]
-    # sqld has no authentication of its own here, and its admin API can
-    # create/delete any namespace with zero credentials — anything that can
-    # reach these ports bypasses the gateway entirely. Loopback only.
-    ports:
-      - "127.0.0.1:8081:8080"
-      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:7787:7787"
 
+  # --- Observability stack: entirely optional, off by default. ---
+  #
+  # Bring it up alongside wardn with:
+  #   WARDN_METRICS_TOKEN=dev-metrics-token \
+  #   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+  #   LOKI_URL=http://loki:3100 \
+  #   podman-compose --profile observability up -d --build
+  #
+  # (see .env.example for the same variables in .env form). Run
+  # `podman-compose up -d --build` with no profile and none of this exists —
+  # just the wardn service above, exactly as small as the spec intends.
   loki:
     image: docker.io/grafana/loki:latest
-    # No host-published port: only wardn (log push) and grafana
-    # (query) need to reach it, both over the compose network.
+    profiles: ["observability"]
+    # No host-published port: only wardn (log push) and grafana (query)
+    # need to reach it, both over the compose network.
 
   tempo:
     image: docker.io/grafana/tempo:2.6.0
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro,Z
+    profiles: ["observability"]
     # No host-published port: only otel-collector (OTLP) and grafana
     # (query) need to reach it.
 
@@ -47,34 +54,9 @@ services:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro,Z
     depends_on:
       - tempo
+    profiles: ["observability"]
     # No host-published port: only wardn needs to reach it, over the
     # compose network.
-
-  wardn:
-    build:
-      context: .
-      dockerfile: Dockerfile.multistage
-    depends_on:
-      - postgres
-      - sqld
-      - otel-collector
-      - loki
-    environment:
-      # Container-to-container addresses (compose's internal DNS), not the
-      # host-published loopback ports above — postgres/sqld are reachable
-      # from the gateway container by service name on their internal ports.
-      DATABASE_URL: postgres://gateway:gateway@postgres:5432/gateway
-      SQLD_URL: http://sqld:8080
-      SQLD_ADMIN_URL: http://sqld:8090
-      LISTEN_ADDR: 0.0.0.0:8787
-      METRICS_TOKEN: dev-metrics-token
-      API_KEY_PEPPER: dev-api-key-pepper-do-not-use-in-prod-min-32-chars
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      LOKI_URL: http://loki:3100
-    # The gateway is the one service meant to be reachable — still loopback
-    # only here since this compose file is for local dev, not production.
-    ports:
-      - "127.0.0.1:8787:8787"
 
   prometheus:
     image: docker.io/prom/prometheus:latest
@@ -88,6 +70,7 @@ services:
       - "127.0.0.1:9090:9090"
     depends_on:
       - wardn
+    profiles: ["observability"]
 
   grafana:
     image: docker.io/grafana/grafana:latest
@@ -96,12 +79,16 @@ services:
       # harmless no-op elsewhere.
       - ./grafana/provisioning:/etc/grafana/provisioning:ro,Z
     environment:
-      # Local dev only: anonymous viewer access so `podman-compose up` gives
-      # a ready-to-browse Grafana with no login step. Loopback only, same
-      # posture as postgres/sqld above.
+      # Local dev only: anonymous viewer access so `podman-compose up`
+      # gives a ready-to-browse Grafana with no login step. Loopback only,
+      # same posture as every other service here.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
+    profiles: ["observability"]
+
+volumes:
+  wardn-data:

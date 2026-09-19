@@ -1,327 +1,171 @@
 mod common;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
-use tower::ServiceExt;
-use wardn::auth::AppState;
-use wardn::db;
-
-async fn test_pool() -> sqlx::PgPool {
-    let url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://gateway:gateway@127.0.0.1:5433/gateway".to_string());
-    db::connect(&url).await.expect("connect to test postgres")
-}
-
-fn test_sqld_url() -> String {
-    std::env::var("SQLD_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
-}
-
-fn admin_url() -> String {
-    std::env::var("SQLD_ADMIN_URL").unwrap_or_else(|_| "http://127.0.0.1:8090".to_string())
-}
-
-async fn delete_namespace(name: &str) {
-    let _ = reqwest::Client::new()
-        .delete(format!("{}/v1/namespaces/{name}", admin_url()))
-        .send()
-        .await;
-}
-
-async fn register(app: axum::Router, email: &str) -> (uuid::Uuid, String) {
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/users")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(r#"{{"email":"{email}"}}"#)))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let user_id: uuid::Uuid = created["user_id"].as_str().unwrap().parse().unwrap();
-    let api_key = created["api_key"].as_str().unwrap().to_string();
-    (user_id, api_key)
-}
+use wardn::{api_keys, members, roles::Role};
 
 #[tokio::test]
-async fn list_keys_shows_the_registration_key() {
-    let pool = test_pool().await;
-    let state = AppState::new(
-        pool.clone(),
-        test_sqld_url(),
-        common::TEST_API_KEY_PEPPER.to_string(),
-    )
-    .with_sqld_admin_url(admin_url());
-    let app = wardn::app(state);
-
-    let (user_id, api_key) = register(
-        app.clone(),
-        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
-    )
-    .await;
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {api_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+async fn created_key_verifies_and_resolves_the_member() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key@example.com", Role::Member, None)
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+    let (key, full_key) = api_keys::create(&db.conn, &member.id, Some("laptop"))
         .await
         .unwrap();
-    let keys: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let keys = keys.as_array().unwrap();
-    assert_eq!(keys.len(), 1);
-    assert!(keys[0].get("revoked_at").unwrap().is_null());
-    assert!(!keys[0].get("prefix").unwrap().as_str().unwrap().is_empty());
+    assert!(full_key.starts_with(api_keys::KEY_MARKER));
+    assert_eq!(key.label.as_deref(), Some("laptop"));
 
-    delete_namespace(&user_id.to_string()).await;
-}
-
-#[tokio::test]
-async fn create_key_mints_an_independent_second_key() {
-    let pool = test_pool().await;
-    let state = AppState::new(
-        pool.clone(),
-        test_sqld_url(),
-        common::TEST_API_KEY_PEPPER.to_string(),
-    )
-    .with_sqld_admin_url(admin_url());
-    let app = wardn::app(state);
-
-    let (user_id, first_key) = register(
-        app.clone(),
-        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
-    )
-    .await;
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let resolved = api_keys::verify(&db.conn, &full_key)
         .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let second_key = created["api_key"].as_str().unwrap().to_string();
-    assert_ne!(second_key, first_key);
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let keys: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(keys.as_array().unwrap().len(), 2);
-
-    // Both keys independently reach the same personal namespace.
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/")
-                .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"statements":["SELECT 1"]}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::OK,
-        "second key should reach the same personal namespace"
-    );
-
-    delete_namespace(&user_id.to_string()).await;
-}
-
-#[tokio::test]
-async fn revoke_key_stops_only_that_key_from_authenticating() {
-    let pool = test_pool().await;
-    let state = AppState::new(
-        pool.clone(),
-        test_sqld_url(),
-        common::TEST_API_KEY_PEPPER.to_string(),
-    )
-    .with_sqld_admin_url(admin_url());
-    let app = wardn::app(state);
-
-    let (user_id, first_key) = register(
-        app.clone(),
-        &format!("keys-{}@example.com", uuid::Uuid::new_v4()),
-    )
-    .await;
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let second_key = created["api_key"].as_str().unwrap().to_string();
-
-    let first_key_id = {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api-keys")
-                    .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let keys: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        // Ordered by created_at — index 0 is the registration key itself.
-        keys.as_array().unwrap()[0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri(format!("/api-keys/{first_key_id}"))
-                .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-    // The revoked key no longer authenticates.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {first_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
-    // The second key is untouched.
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {second_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    delete_namespace(&user_id.to_string()).await;
-}
-
-#[tokio::test]
-async fn revoke_key_returns_404_for_someone_elses_key() {
-    let pool = test_pool().await;
-    let state = AppState::new(
-        pool.clone(),
-        test_sqld_url(),
-        common::TEST_API_KEY_PEPPER.to_string(),
-    )
-    .with_sqld_admin_url(admin_url());
-    let app = wardn::app(state);
-
-    let (user_a_id, key_a) = register(
-        app.clone(),
-        &format!("keys-a-{}@example.com", uuid::Uuid::new_v4()),
-    )
-    .await;
-    let (user_b_id, key_b) = register(
-        app.clone(),
-        &format!("keys-b-{}@example.com", uuid::Uuid::new_v4()),
-    )
-    .await;
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api-keys")
-                .header(header::AUTHORIZATION, format!("Bearer {key_b}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let keys: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let key_b_id = keys.as_array().unwrap()[0]["id"]
-        .as_str()
         .unwrap()
-        .to_string();
+        .unwrap();
+    assert_eq!(resolved.id, member.id);
+}
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri(format!("/api-keys/{key_b_id}"))
-                .header(header::AUTHORIZATION, format!("Bearer {key_a}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+#[tokio::test]
+async fn wrong_key_does_not_verify() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key2@example.com", Role::Member, None)
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (_key, full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+    let tampered = format!("{full_key}x");
 
-    delete_namespace(&user_a_id.to_string()).await;
-    delete_namespace(&user_b_id.to_string()).await;
+    assert!(
+        api_keys::verify(&db.conn, &tampered)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn garbage_input_does_not_verify() {
+    let (_dir, db) = common::temp_db().await;
+    assert!(
+        api_keys::verify(&db.conn, "not-a-real-key")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn revoked_key_no_longer_verifies() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key3@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (key, full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+    api_keys::revoke(&db.conn, &key.id).await.unwrap();
+
+    assert!(
+        api_keys::verify(&db.conn, &full_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn revoking_twice_is_not_an_error() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key4@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (key, _full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+    api_keys::revoke(&db.conn, &key.id).await.unwrap();
+    api_keys::revoke(&db.conn, &key.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn key_belonging_to_a_removed_member_does_not_verify() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key5@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (_key, full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+    members::remove(&db.conn, &member.id).await.unwrap();
+
+    assert!(
+        api_keys::verify(&db.conn, &full_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn cannot_create_a_key_for_a_removed_member() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key6@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    members::remove(&db.conn, &member.id).await.unwrap();
+    assert!(api_keys::create(&db.conn, &member.id, None).await.is_err());
+}
+
+#[tokio::test]
+async fn list_returns_keys_newest_first() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "key7@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (first, _) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+    let (second, _) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+
+    let keys = api_keys::list(&db.conn).await.unwrap();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().any(|k| k.id == first.id));
+    assert!(keys.iter().any(|k| k.id == second.id));
+}
+
+#[tokio::test]
+async fn create_fails_for_a_nonexistent_member() {
+    let (_dir, db) = common::temp_db().await;
+    let err = api_keys::create(&db.conn, "no-such-member", None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no member"));
+}
+
+#[tokio::test]
+async fn find_by_id_returns_none_for_an_unknown_id() {
+    let (_dir, db) = common::temp_db().await;
+    assert!(
+        api_keys::find_by_id(&db.conn, "no-such-key")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn revoke_fails_for_an_unknown_key_id() {
+    let (_dir, db) = common::temp_db().await;
+    let err = api_keys::revoke(&db.conn, "no-such-key").await.unwrap_err();
+    assert!(err.to_string().contains("no api key"));
+}
+
+#[tokio::test]
+async fn verify_fails_closed_when_the_stored_hash_is_corrupted() {
+    let (_dir, db) = common::temp_db().await;
+    let member = members::invite(&db.conn, "corrupt@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    let (_key, full_key) = api_keys::create(&db.conn, &member.id, None).await.unwrap();
+
+    // Simulate a corrupted key_hash column (not producible through the
+    // public API) — `verify` must fail closed, not panic or error, when
+    // `PasswordHash::new` can't even parse the stored value.
+    db.conn
+        .execute("UPDATE api_keys SET key_hash = 'not-an-argon2-hash'", ())
+        .await
+        .unwrap();
+
+    assert!(
+        api_keys::verify(&db.conn, &full_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

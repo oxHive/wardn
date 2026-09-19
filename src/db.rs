@@ -1,62 +1,89 @@
-use chrono::{DateTime, Utc};
-use sqlx::PgPool;
-use uuid::Uuid;
+use anyhow::{Context, Result};
+use libsql::Connection;
 
-pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    let pool = PgPool::connect(database_url).await?;
-    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
-        tracing::error!(
-            "database migration failed: {e}. If this is migration 0002's \
-             sqld_namespace format check, a pre-existing database_mappings row \
-             violates it — fix or delete that row (see scripts/reset-dev-db.sh \
-             for a full dev-DB reset), then retry."
-        );
-        return Err(e.into());
+/// Applied immediately after opening every connection — same convention
+/// Mynd uses for its own libSQL databases (see `MYND_SPEC_ADDENDUM.md`).
+/// `foreign_keys=ON` isn't durable per-database in SQLite/libSQL; it's a
+/// per-connection setting, so this must run every time a connection opens,
+/// not just once at db creation.
+const PRAGMAS: &str = "PRAGMA journal_mode=WAL; \
+     PRAGMA synchronous=NORMAL; \
+     PRAGMA foreign_keys=ON; \
+     PRAGMA busy_timeout=5000;";
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS org (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS members (
+    id          TEXT PRIMARY KEY,
+    email       TEXT UNIQUE NOT NULL,
+    role        TEXT NOT NULL,
+    invited_by  TEXT REFERENCES members(id),
+    joined_at   INTEGER NOT NULL,
+    removed_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id            TEXT PRIMARY KEY,
+    member_id     TEXT NOT NULL REFERENCES members(id),
+    label         TEXT,
+    key_hash      TEXT UNIQUE NOT NULL,
+    key_prefix    TEXT NOT NULL,
+    created_at    INTEGER NOT NULL,
+    last_used_at  INTEGER,
+    revoked_at    INTEGER
+);
+";
+
+/// Holds the `libsql::Database` alive for as long as the `Connection`
+/// borrowed from it is in use. `libsql::Connection` does not keep its
+/// parent `Database` alive on its own, so the two must travel together for
+/// the lifetime of the process (CLI command or `wardn serve`).
+pub struct Db {
+    #[allow(dead_code)]
+    database: libsql::Database,
+    pub conn: Connection,
+}
+
+impl Db {
+    /// Opens (creating if necessary) the local libSQL database at `path`,
+    /// applies Wardn's standard PRAGMAs, and ensures the org/members/api_keys
+    /// tables exist.
+    pub async fn open(path: &str) -> Result<Db> {
+        if let Some(parent) = std::path::Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating directory {}", parent.display()))?;
+        }
+        let database = libsql::Builder::new_local(path)
+            .build()
+            .await
+            .with_context(|| format!("opening libSQL database at {path}"))?;
+        let conn = database.connect().context("opening libSQL connection")?;
+        conn.execute_batch(PRAGMAS)
+            .await
+            .context("applying PRAGMAs")?;
+        conn.execute_batch(SCHEMA)
+            .await
+            .context("creating schema")?;
+        Ok(Db { database, conn })
     }
-    Ok(pool)
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct ApiKeyRow {
-    pub id: Uuid,
-    pub owner_type: String,
-    pub owner_id: Uuid,
-    pub prefix: String,
-    pub key_hash: String,
-    pub revoked_at: Option<DateTime<Utc>>,
+/// Seconds since the Unix epoch, as stored in every `*_at` column.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs() as i64
 }
 
-/// Only matches a non-revoked key — `idx_api_keys_prefix`'s partial index
-/// (`WHERE revoked_at IS NULL`) covers exactly this predicate, so a revoked
-/// key's row is invisible here rather than filtered out by the caller. A
-/// revoked key therefore looks identical to an unknown prefix to
-/// `auth_middleware`, which is fine: both already return the same 401.
-#[tracing::instrument(skip(pool, prefix))]
-pub async fn find_api_key_by_prefix(
-    pool: &PgPool,
-    prefix: &str,
-) -> Result<Option<ApiKeyRow>, sqlx::Error> {
-    sqlx::query_as::<_, ApiKeyRow>(
-        "SELECT id, owner_type, owner_id, prefix, key_hash, revoked_at
-         FROM api_keys WHERE prefix = $1 AND revoked_at IS NULL",
-    )
-    .bind(prefix)
-    .fetch_optional(pool)
-    .await
-}
-
-#[tracing::instrument(skip(pool))]
-pub async fn find_database_mapping(
-    pool: &PgPool,
-    owner_type: &str,
-    owner_id: Uuid,
-) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT sqld_namespace FROM database_mappings WHERE owner_type = $1 AND owner_id = $2",
-    )
-    .bind(owner_type)
-    .bind(owner_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(ns,)| ns))
+/// A fresh random id for a new row (org/member/api_key primary key).
+pub fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }

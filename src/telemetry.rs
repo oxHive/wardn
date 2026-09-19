@@ -1,8 +1,8 @@
-//! Constructs the two *optional* tracing_subscriber layers this project
-//! adds on top of its always-on stdout JSON layer: OTLP trace export and a
-//! Loki log push. Both are wired up in `main.rs` only when their
-//! corresponding `Config` field is `Some` — see
-//! `docs/superpowers/specs/2026-08-14-otel-tracing-and-logs-design.md`.
+//! Constructs the two *optional* tracing_subscriber layers wardn adds on
+//! top of its always-on stdout log layer: OTLP trace export and a Loki log
+//! push. Both are wired up in `main.rs` only when their corresponding env
+//! var (`OTEL_EXPORTER_OTLP_ENDPOINT` / `LOKI_URL`) is set — see
+//! `src/config.rs`.
 
 use anyhow::Context;
 use opentelemetry::trace::TracerProvider;
