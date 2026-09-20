@@ -65,6 +65,10 @@ pub enum ServiceCommand {
     Install {
         #[arg(long)]
         listen: Option<String>,
+        /// (Linux only) Skip `loginctl enable-linger`. Without linger the
+        /// service only starts when you log in, not unattended at boot.
+        #[arg(long)]
+        no_linger: bool,
     },
     /// Stops the service and removes its service definition.
     Uninstall,
@@ -394,10 +398,13 @@ async fn serve_reachability_line(listen_addr: &str) -> Result<String> {
 
 pub async fn cmd_service(db_path: &str, command: ServiceCommand) -> Result<()> {
     match command {
-        ServiceCommand::Install { listen } => {
+        ServiceCommand::Install { listen, no_linger } => {
             let exe = std::env::current_exe().context("locating the wardn binary")?;
             let listen = listen.unwrap_or_else(config::default_listen_addr);
-            println!("{}", crate::service::install(&exe, db_path, &listen)?);
+            println!(
+                "{}",
+                crate::service::install(&exe, db_path, &listen, !no_linger)?
+            );
         }
         ServiceCommand::Uninstall => {
             println!("{}", crate::service::uninstall()?);

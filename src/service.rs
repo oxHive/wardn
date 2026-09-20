@@ -20,11 +20,19 @@ use anyhow::{Context, Result, bail};
 const UNIT_NAME: &str = "wardn.service";
 const LABEL: &str = "com.oxhive.wardn";
 
-pub fn install(exec_path: &Path, db_path: &str, listen: &str) -> Result<String> {
+pub fn install(
+    exec_path: &Path,
+    db_path: &str,
+    listen: &str,
+    enable_linger: bool,
+) -> Result<String> {
     let exec_path = exec_path.to_string_lossy();
     if cfg!(target_os = "linux") {
-        install_systemd(&exec_path, db_path, listen)
+        install_systemd(&exec_path, db_path, listen, enable_linger)
     } else if cfg!(target_os = "macos") {
+        // launchd has no linger equivalent — a LaunchAgent only ever starts
+        // on login, so the flag is meaningless here (see `install_launchd`'s
+        // doc comment).
         install_launchd(&exec_path, db_path, listen)
     } else {
         bail!("`wardn service` supports Linux (systemd) and macOS (launchd) only");
@@ -80,7 +88,12 @@ fn systemd_unit_path() -> Result<PathBuf> {
     resolve_systemd_unit_path(dirs::config_dir().as_deref())
 }
 
-fn install_systemd(exec_path: &str, db_path: &str, listen: &str) -> Result<String> {
+fn install_systemd(
+    exec_path: &str,
+    db_path: &str,
+    listen: &str,
+    enable_linger: bool,
+) -> Result<String> {
     let unit_path = systemd_unit_path()?;
     if let Some(parent) = unit_path.parent() {
         std::fs::create_dir_all(parent)
@@ -96,13 +109,54 @@ fn install_systemd(exec_path: &str, db_path: &str, listen: &str) -> Result<Strin
     // explicit restart to pick up the new Environment= lines.
     run_ok(Command::new("systemctl").args(["--user", "restart", UNIT_NAME]))?;
 
+    // `WantedBy=default.target` alone only starts the unit when this user
+    // logs in — a systemd --user manager doesn't run at boot unless
+    // lingering is on. Without it, a headless box that reboots stays down
+    // until someone logs in again.
+    let linger = if enable_linger {
+        enable_linger_now()
+    } else {
+        LingerOutcome::Skipped
+    };
+
     Ok(format!(
-        "Installed {} and started it (enabled to run on login).\n\
-         On a headless box, keep it running after logout with:\n\n    \
-         loginctl enable-linger $USER\n\n\
+        "Installed {} and started it (enabled to run on login).\n{}\n\
          Check on it any time with `wardn service status`.",
-        unit_path.display()
+        unit_path.display(),
+        linger_note(&linger),
     ))
+}
+
+enum LingerOutcome {
+    Skipped,
+    Enabled,
+    Failed(String),
+}
+
+fn enable_linger_now() -> LingerOutcome {
+    match Command::new("loginctl").arg("enable-linger").output() {
+        Ok(out) if out.status.success() => LingerOutcome::Enabled,
+        Ok(out) => LingerOutcome::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        Err(e) => LingerOutcome::Failed(e.to_string()),
+    }
+}
+
+fn linger_note(outcome: &LingerOutcome) -> String {
+    match outcome {
+        LingerOutcome::Enabled => {
+            "Linger enabled — this also starts the service at boot, without needing a login."
+                .to_string()
+        }
+        LingerOutcome::Skipped => {
+            "Linger not enabled (--no-linger) — the service starts on login, not at boot. \
+             Enable it later with `loginctl enable-linger $USER`."
+                .to_string()
+        }
+        LingerOutcome::Failed(err) => format!(
+            "Could not enable linger automatically ({err}) — the service still starts on \
+             login, but not at boot until you run `loginctl enable-linger $USER` yourself."
+        ),
+    }
 }
 
 fn uninstall_systemd() -> Result<String> {
@@ -138,11 +192,35 @@ fn systemd_status() -> Result<String> {
         command_stdout(Command::new("systemctl").args(["--user", "is-enabled", UNIT_NAME]));
     let active = command_stdout(Command::new("systemctl").args(["--user", "is-active", UNIT_NAME]));
     Ok(format!(
-        "service: installed ({}) — enabled={} active={}",
+        "service: installed ({}) — enabled={} active={}\n{}",
         unit_path.display(),
         enabled.as_deref().unwrap_or("unknown"),
         active.as_deref().unwrap_or("unknown"),
+        linger_status_line(),
     ))
+}
+
+fn linger_status_line() -> String {
+    let username = command_stdout(&mut Command::new("whoami"));
+    let linger = username.as_deref().and_then(|user| {
+        command_stdout(Command::new("loginctl").args([
+            "show-user",
+            "--value",
+            "-p",
+            "Linger",
+            user,
+        ]))
+    });
+    match linger.as_deref() {
+        Some("yes") => {
+            "linger: enabled — this service also starts at boot, without needing a login"
+                .to_string()
+        }
+        Some("no") => "linger: disabled — starts on login only (`loginctl enable-linger $USER` \
+                        to also start at boot)"
+            .to_string(),
+        _ => "linger: unknown".to_string(),
+    }
 }
 
 // --- launchd (macOS) ----------------------------------------------------
@@ -214,6 +292,13 @@ fn launchd_log_path() -> Result<PathBuf> {
     resolve_launchd_log_path(dirs::data_local_dir().as_deref())
 }
 
+/// Unlike a systemd --user unit, a LaunchAgent has no lingering
+/// equivalent: it only ever starts when this user's launchd session
+/// starts, which happens on login (interactive or auto-login), never
+/// unattended at boot. Surviving a reboot without a login requires either
+/// enabling auto-login for this user, or a root-owned LaunchDaemon
+/// instead — both outside what `wardn service install` does, since it's
+/// deliberately user-level.
 fn install_launchd(exec_path: &str, db_path: &str, listen: &str) -> Result<String> {
     let plist_path = launchd_plist_path()?;
     if let Some(parent) = plist_path.parent() {
@@ -239,7 +324,10 @@ fn install_launchd(exec_path: &str, db_path: &str, listen: &str) -> Result<Strin
     run_ok(Command::new("launchctl").args(["load", "-w", &plist_path.to_string_lossy()]))?;
 
     Ok(format!(
-        "Installed {} and started it (enabled to run on login).\nLogs: {}\n\
+        "Installed {} and started it (enabled to run on login).\n\
+         This starts again on login, not unattended at boot — see \
+         auto-login if this needs to survive a reboot with nobody signed in.\n\
+         Logs: {}\n\
          Check on it any time with `wardn service status`.",
         plist_path.display(),
         log_path.display(),
@@ -407,5 +495,26 @@ mod tests {
         // connect to at all — it exits non-zero with nothing on stdout,
         // which should read as "unknown", not a blank status line.
         assert_eq!(command_stdout(&mut Command::new("true")), None);
+    }
+
+    #[test]
+    fn linger_note_enabled_mentions_boot() {
+        assert!(linger_note(&LingerOutcome::Enabled).contains("boot"));
+    }
+
+    #[test]
+    fn linger_note_skipped_explains_how_to_enable_it_later() {
+        let note = linger_note(&LingerOutcome::Skipped);
+        assert!(note.contains("--no-linger"));
+        assert!(note.contains("loginctl enable-linger $USER"));
+    }
+
+    #[test]
+    fn linger_note_failed_surfaces_the_underlying_error() {
+        let note = linger_note(&LingerOutcome::Failed(
+            "Interactive authentication required.".into(),
+        ));
+        assert!(note.contains("Interactive authentication required."));
+        assert!(note.contains("loginctl enable-linger $USER"));
     }
 }

@@ -140,20 +140,30 @@ manages that for you, under the platform's native, user-level service
 manager (no root, no `sudo`):
 
 ```sh
-wardn service install [--listen <addr>]   # writes the service definition,
-                                           # enables it, starts it
+wardn service install [--listen <addr>] [--no-linger]  # writes the service
+                                                         # definition, enables
+                                                         # it, starts it
 wardn service status                      # installed? enabled? active?
-                                           # and is it actually answering?
+                                           # linger on? and is it actually
+                                           # answering?
 wardn service uninstall                   # stops it, removes the
                                            # definition
 ```
 
 - **Linux:** a `systemd --user` unit at `~/.config/systemd/user/wardn.service`.
-  On a headless self-hosted box, run `loginctl enable-linger $USER` once so
-  the service keeps running after you log out.
+  A `systemd --user` manager only runs while you're logged in unless
+  *lingering* is on, so `wardn service install` also runs
+  `loginctl enable-linger` for you — this is what lets the service survive a
+  full reboot on a headless self-hosted box, not just a logout. Pass
+  `--no-linger` to skip it (the service then only starts on login); `wardn
+  service status` reports whether linger is currently on.
 - **macOS:** a launchd `LaunchAgent` at
   `~/Library/LaunchAgents/com.oxhive.wardn.plist`, logging to
-  `~/Library/Application Support/wardn/service.log`.
+  `~/Library/Application Support/wardn/service.log`. There's no linger
+  equivalent here — a LaunchAgent only starts on login (interactive or
+  auto-login); surviving an unattended reboot needs auto-login enabled for
+  this user, since wardn deliberately never installs a root-owned
+  LaunchDaemon.
 
 The database path and listen address active at install time (`--db`/
 `$WARDN_DB_PATH`, `--listen`/`$WARDN_LISTEN_ADDR`) are baked into the
