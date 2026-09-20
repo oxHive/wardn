@@ -26,9 +26,14 @@ out of scope for this repository (see `WARDN_SPECIFICATION.md`).
 ## Quickstart
 
 ```sh
-cargo install --path .
+curl -fsSL https://get.oxhive.dev/wardn | sh
 wardn init --name "Acme Corp"
 ```
+
+Downloads the prebuilt binary for your OS/architecture and installs it to
+`~/.local/bin` (override with `INSTALL_DIR`, pin a version with
+`VERSION=v0.3.0`). See [get.oxhive.dev](https://get.oxhive.dev) for details,
+or build from source with `cargo build --release`.
 
 This creates a local libSQL database (default: `~/.local/share/wardn/org.db`,
 override with `--db <path>` or `$WARDN_DB_PATH`) and the org record.
@@ -174,8 +179,8 @@ changing either — it reinstalls and restarts cleanly.
 If you installed via Homebrew: the formula only does `bin.install "wardn"`
 — it does not define a `brew services`-managed service, so there's no
 conflict with the above. Use `wardn service install`/`status`/`uninstall`
-regardless of how the binary was installed (`cargo install`, Homebrew, a
-downloaded release binary, or built from source) — it's the one, portable
+regardless of how the binary was installed (the get.oxhive.dev installer,
+Homebrew, or built from source) — it's the one, portable
 way to run wardn as a background service.
 
 ## Storage
