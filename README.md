@@ -75,6 +75,13 @@ wardn status                        # org name, member count, storage path,
                                      # whether wardn serve is reachable
 wardn serve                         # start the HTTP service Mynd
                                      # authorizes against
+wardn service install               # run `wardn serve` as a background
+                                     # OS service (see "Running as a
+                                     # service" below)
+wardn service status                # is the service installed, enabled,
+                                     # running, and actually reachable
+wardn service uninstall             # stop it and remove the service
+                                     # definition
 ```
 
 Every operation a self-hosted team needs is available via this CLI — a
@@ -125,6 +132,51 @@ podman-compose --profile observability up -d --build
 
 See `.env.example` for the full set of variables and `podman-compose.yml`
 for how the stack is wired together.
+
+## Running as a service
+
+`wardn serve` needs to keep running in the background — `wardn service`
+manages that for you, under the platform's native, user-level service
+manager (no root, no `sudo`):
+
+```sh
+wardn service install [--listen <addr>] [--no-linger]  # writes the service
+                                                         # definition, enables
+                                                         # it, starts it
+wardn service status                      # installed? enabled? active?
+                                           # linger on? and is it actually
+                                           # answering?
+wardn service uninstall                   # stops it, removes the
+                                           # definition
+```
+
+- **Linux:** a `systemd --user` unit at `~/.config/systemd/user/wardn.service`.
+  A `systemd --user` manager only runs while you're logged in unless
+  *lingering* is on, so `wardn service install` also runs
+  `loginctl enable-linger` for you — this is what lets the service survive a
+  full reboot on a headless self-hosted box, not just a logout. Pass
+  `--no-linger` to skip it (the service then only starts on login); `wardn
+  service status` reports whether linger is currently on.
+- **macOS:** a launchd `LaunchAgent` at
+  `~/Library/LaunchAgents/com.oxhive.wardn.plist`, logging to
+  `~/Library/Application Support/wardn/service.log`. There's no linger
+  equivalent here — a LaunchAgent only starts on login (interactive or
+  auto-login); surviving an unattended reboot needs auto-login enabled for
+  this user, since wardn deliberately never installs a root-owned
+  LaunchDaemon.
+
+The database path and listen address active at install time (`--db`/
+`$WARDN_DB_PATH`, `--listen`/`$WARDN_LISTEN_ADDR`) are baked into the
+service definition, since neither systemd user units nor launchd agents
+inherit your shell's environment. Re-run `wardn service install` after
+changing either — it reinstalls and restarts cleanly.
+
+If you installed via Homebrew: the formula only does `bin.install "wardn"`
+— it does not define a `brew services`-managed service, so there's no
+conflict with the above. Use `wardn service install`/`status`/`uninstall`
+regardless of how the binary was installed (`cargo install`, Homebrew, a
+downloaded release binary, or built from source) — it's the one, portable
+way to run wardn as a background service.
 
 ## Storage
 

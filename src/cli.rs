@@ -49,6 +49,31 @@ enum Command {
         #[arg(long)]
         listen: Option<String>,
     },
+    /// Run `wardn serve` as a background OS service (systemd --user unit
+    /// on Linux, a launchd LaunchAgent on macOS).
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceCommand {
+    /// Installs a service definition for `wardn serve` and starts it,
+    /// enabled to run again on login/boot. Safe to re-run after changing
+    /// `--listen` or `--db` — it reinstalls and restarts.
+    Install {
+        #[arg(long)]
+        listen: Option<String>,
+        /// (Linux only) Skip `loginctl enable-linger`. Without linger the
+        /// service only starts when you log in, not unattended at boot.
+        #[arg(long)]
+        no_linger: bool,
+    },
+    /// Stops the service and removes its service definition.
+    Uninstall,
+    /// Whether the service is installed, enabled, and currently running.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -120,6 +145,7 @@ pub async fn run() -> Result<()> {
         Command::Keys { command } => cmd_keys(&db_path, command).await,
         Command::Status => cmd_status(&db_path).await,
         Command::Serve { listen } => cmd_serve(&db_path, listen).await,
+        Command::Service { command } => cmd_service(&db_path, command).await,
     }
 }
 
@@ -333,28 +359,61 @@ pub async fn cmd_status(db_path: &str) -> Result<()> {
     println!("members: {}", members.len());
 
     let listen_addr = config::default_listen_addr();
+    println!("{}", serve_reachability_line(&listen_addr).await?);
+    Ok(())
+}
+
+/// Whether `wardn serve` answers `/v1/status` at `listen_addr` — shared by
+/// `wardn status` and `wardn service status`, since "the service unit is
+/// active" and "the HTTP server it starts is actually answering" are
+/// different questions (a unit can be "active" while the process inside it
+/// is crash-looping).
+async fn serve_reachability_line(listen_addr: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()?;
-    match client
-        .get(format!("http://{listen_addr}/v1/status"))
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            #[derive(serde::Deserialize)]
-            struct Status {
-                started_at: i64,
-            }
-            match resp.json::<Status>().await {
-                Ok(status) => {
-                    let uptime = crate::db::now() - status.started_at;
-                    println!("serve: running at {listen_addr} (uptime {uptime}s)");
+    Ok(
+        match client
+            .get(format!("http://{listen_addr}/v1/status"))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                #[derive(serde::Deserialize)]
+                struct Status {
+                    started_at: i64,
                 }
-                Err(_) => println!("serve: running at {listen_addr}"),
+                match resp.json::<Status>().await {
+                    Ok(status) => {
+                        let uptime = crate::db::now() - status.started_at;
+                        format!("serve: running at {listen_addr} (uptime {uptime}s)")
+                    }
+                    Err(_) => format!("serve: running at {listen_addr}"),
+                }
             }
+            _ => format!("serve: not running (checked {listen_addr})"),
+        },
+    )
+}
+
+pub async fn cmd_service(db_path: &str, command: ServiceCommand) -> Result<()> {
+    match command {
+        ServiceCommand::Install { listen, no_linger } => {
+            let exe = std::env::current_exe().context("locating the wardn binary")?;
+            let listen = listen.unwrap_or_else(config::default_listen_addr);
+            println!(
+                "{}",
+                crate::service::install(&exe, db_path, &listen, !no_linger)?
+            );
         }
-        _ => println!("serve: not running (checked {listen_addr})"),
+        ServiceCommand::Uninstall => {
+            println!("{}", crate::service::uninstall()?);
+        }
+        ServiceCommand::Status => {
+            println!("{}", crate::service::os_status()?);
+            let listen_addr = config::default_listen_addr();
+            println!("{}", serve_reachability_line(&listen_addr).await?);
+        }
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ pub mod observability;
 pub mod org;
 pub mod roles;
 pub mod serve;
+pub mod service;
 #[cfg(feature = "observability")]
 pub mod telemetry;
 
