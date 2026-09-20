@@ -32,8 +32,11 @@ wardn init --name "Acme Corp"
 
 Downloads the prebuilt binary for your OS/architecture and installs it to
 `~/.local/bin` (override with `INSTALL_DIR`, pin a version with
-`VERSION=v0.3.0`). See [get.oxhive.dev](https://get.oxhive.dev) for details,
-or build from source with `cargo build --release`.
+`VERSION=v0.3.0`). See [get.oxhive.dev](https://get.oxhive.dev) for details.
+
+Alternative: `brew install oxhive/tap/wardn` (also the only prebuilt option
+on Intel Macs, since no `x86_64-apple-darwin` binary is published). Or
+build from source with `cargo build --release`.
 
 This creates a local libSQL database (default: `~/.local/share/wardn/org.db`,
 override with `--db <path>` or `$WARDN_DB_PATH`) and the org record.
