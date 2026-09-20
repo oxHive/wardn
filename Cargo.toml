@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Open source org & access layer for Mynd — org, member, and role management, plus the authorization service Mynd calls before touching org-layer memory"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/oxhive/warden"
+repository = "https://github.com/oxhive/wardn"
 
 [lib]
 name = "wardn"

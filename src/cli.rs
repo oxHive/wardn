@@ -46,6 +46,8 @@ enum Command {
     Status,
     /// Start the HTTP authorization service Mynd instances call.
     Serve {
+        /// Address to bind to. Defaults to `$WARDN_LISTEN_ADDR`, or
+        /// `127.0.0.1:7787`.
         #[arg(long)]
         listen: Option<String>,
     },
@@ -63,6 +65,9 @@ pub enum ServiceCommand {
     /// enabled to run again on login/boot. Safe to re-run after changing
     /// `--listen` or `--db` — it reinstalls and restarts.
     Install {
+        /// Address the installed service binds to. Baked into the service
+        /// definition (not inherited from the environment). Defaults to
+        /// `$WARDN_LISTEN_ADDR`, or `127.0.0.1:7787`.
         #[arg(long)]
         listen: Option<String>,
         /// (Linux only) Skip `loginctl enable-linger`. Without linger the
