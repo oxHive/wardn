@@ -15,7 +15,7 @@ name = "wardn"
 path = "src/main.rs"
 
 [dependencies]
-libsql = { version = "0.6", features = ["core"] }
+libsql = { version = "0.6", default-features = false, features = ["core"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 argon2 = "0.5"
