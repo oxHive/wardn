@@ -13,8 +13,6 @@ jobs:
       pull-requests: read
       checks: write
       packages: write
-    # Pinned to a commit (see pull-request.yml); this job signs and publishes
-    # release artifacts, so the workflow it runs must not change under it.
     uses: oxHive/pipelines/.github/workflows/rust-release.yml@v2
     with:
       package-name: wardn
@@ -23,9 +21,6 @@ jobs:
       homebrew-install: 'bin.install "wardn"'
       homebrew-test-command: 'system "#{bin}/wardn", "--version"'
       publish-docker: true
-    # Only the secrets rust-release.yml declares (all optional), rather than
-    # `inherit`, so the reusable workflow never sees anything else this repo
-    # holds.
     secrets:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       HOMEBREW_APP_ID: ${{ secrets.HOMEBREW_APP_ID }}
