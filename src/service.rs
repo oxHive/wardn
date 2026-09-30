@@ -59,9 +59,31 @@ pub fn os_status() -> Result<String> {
     }
 }
 
+/// The listen address the installed service was configured with, if a
+/// service definition exists and it can be read — `wardn service install
+/// --listen` bakes this in, so it can differ from the shell's default.
+pub fn installed_listen_addr() -> Option<String> {
+    if cfg!(target_os = "linux") {
+        let unit = std::fs::read_to_string(systemd_unit_path().ok()?).ok()?;
+        listen_addr_from_systemd_unit(&unit)
+    } else if cfg!(target_os = "macos") {
+        let plist = std::fs::read_to_string(launchd_plist_path().ok()?).ok()?;
+        listen_addr_from_launchd_plist(&plist)
+    } else {
+        None
+    }
+}
+
 // --- systemd (Linux) --------------------------------------------------
 
 pub fn systemd_unit(exec_path: &str, db_path: &str, listen: &str) -> String {
+    // Every value is double-quoted and escaped: systemd splits unquoted
+    // values on whitespace, expands `%` specifiers everywhere, and expands
+    // `$VAR` in `ExecStart=`, so a path like `/home/me/My Data/org.db`
+    // would otherwise be cut short or rewritten.
+    let exec_path = systemd_quote(&exec_path.replace('$', "$$"));
+    let db_env = systemd_quote(&format!("WARDN_DB_PATH={db_path}"));
+    let listen_env = systemd_quote(&format!("{LISTEN_ENV_PREFIX}{listen}"));
     format!(
         "[Unit]\n\
          Description=wardn — org & access layer for Mynd\n\
@@ -71,12 +93,64 @@ pub fn systemd_unit(exec_path: &str, db_path: &str, listen: &str) -> String {
          ExecStart={exec_path} serve\n\
          Restart=on-failure\n\
          RestartSec=2\n\
-         Environment=WARDN_DB_PATH={db_path}\n\
-         Environment=WARDN_LISTEN_ADDR={listen}\n\
+         Environment={db_env}\n\
+         Environment={listen_env}\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n"
     )
+}
+
+const LISTEN_ENV_PREFIX: &str = "WARDN_LISTEN_ADDR=";
+
+/// Wraps `s` in double quotes, C-escaping `\`, `"` and newlines and
+/// doubling `%` so systemd reads it back as exactly one literal word.
+fn systemd_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '%' => out.push_str("%%"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Inverse of `systemd_quote` for one `Environment=` value; also accepts
+/// the unquoted form older `wardn service install`s wrote.
+fn systemd_unquote(s: &str) -> String {
+    let Some(inner) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return s.to_string();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(next)) => {
+                chars.next();
+                out.push(if next == 'n' { '\n' } else { next });
+            }
+            ('%', Some('%')) => {
+                chars.next();
+                out.push('%');
+            }
+            (c, _) => out.push(c),
+        }
+    }
+    out
+}
+
+/// The `WARDN_LISTEN_ADDR` baked into an installed systemd unit.
+pub fn listen_addr_from_systemd_unit(unit: &str) -> Option<String> {
+    unit.lines()
+        .filter_map(|line| line.trim().strip_prefix("Environment="))
+        .map(systemd_unquote)
+        .find_map(|value| value.strip_prefix(LISTEN_ENV_PREFIX).map(str::to_string))
 }
 
 pub fn resolve_systemd_unit_path(config_dir: Option<&Path>) -> Result<PathBuf> {
@@ -271,6 +345,22 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// The `WARDN_LISTEN_ADDR` baked into an installed launchd plist.
+pub fn listen_addr_from_launchd_plist(plist: &str) -> Option<String> {
+    let after_key = plist.split_once("<key>WARDN_LISTEN_ADDR</key>")?.1;
+    let value = after_key.trim_start().strip_prefix("<string>")?;
+    let (value, _) = value.split_once("</string>")?;
+    Some(xml_unescape(value))
+}
+
 pub fn resolve_launchd_plist_path(home_dir: Option<&Path>) -> Result<PathBuf> {
     let base = home_dir.context("could not determine the home directory")?;
     Ok(base
@@ -407,10 +497,50 @@ mod tests {
             "/data/org.db",
             "127.0.0.1:7787",
         );
-        assert!(unit.contains("ExecStart=/home/alice/.cargo/bin/wardn serve"));
-        assert!(unit.contains("Environment=WARDN_DB_PATH=/data/org.db"));
-        assert!(unit.contains("Environment=WARDN_LISTEN_ADDR=127.0.0.1:7787"));
+        assert!(unit.contains("ExecStart=\"/home/alice/.cargo/bin/wardn\" serve"));
+        assert!(unit.contains("Environment=\"WARDN_DB_PATH=/data/org.db\""));
+        assert!(unit.contains("Environment=\"WARDN_LISTEN_ADDR=127.0.0.1:7787\""));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn systemd_unit_quotes_spaces_and_escapes_specifiers() {
+        let unit = systemd_unit(
+            "/home/al/My Apps/$bin/wardn",
+            "/home/al/My Data/100%\\\"x\".db",
+            "127.0.0.1:7787",
+        );
+        assert!(unit.contains("ExecStart=\"/home/al/My Apps/$$bin/wardn\" serve"));
+        assert!(
+            unit.contains("Environment=\"WARDN_DB_PATH=/home/al/My Data/100%%\\\\\\\"x\\\".db\"")
+        );
+    }
+
+    #[test]
+    fn listen_addr_round_trips_through_the_systemd_unit() {
+        let unit = systemd_unit("/bin/wardn", "/data/org.db", "127.0.0.1:9000");
+        assert_eq!(
+            listen_addr_from_systemd_unit(&unit).as_deref(),
+            Some("127.0.0.1:9000")
+        );
+    }
+
+    #[test]
+    fn listen_addr_is_read_from_older_unquoted_units() {
+        let unit = "[Service]\nEnvironment=WARDN_LISTEN_ADDR=0.0.0.0:8000\n";
+        assert_eq!(
+            listen_addr_from_systemd_unit(unit).as_deref(),
+            Some("0.0.0.0:8000")
+        );
+    }
+
+    #[test]
+    fn listen_addr_round_trips_through_the_launchd_plist() {
+        let plist = launchd_plist("/bin/wardn", "/data/org.db", "[::1]:9000", "/log");
+        assert_eq!(
+            listen_addr_from_launchd_plist(&plist).as_deref(),
+            Some("[::1]:9000")
+        );
     }
 
     #[test]

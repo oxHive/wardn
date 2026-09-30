@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use libsql::{Connection, params};
+use libsql::{Connection, TransactionBehavior, params};
 use serde::Serialize;
 
 use crate::db;
@@ -46,17 +46,45 @@ pub async fn invite(
         bail!("email must not be empty");
     }
     let existing = find_by_email(conn, &email).await?;
-    if let Some(existing) = existing
+    if let Some(existing) = &existing
         && existing.removed_at.is_none()
     {
         bail!("{email} is already a member of this org");
     }
+    let invited_by = invited_by.map(str::to_string);
+    let joined_at = db::now();
+
+    // `members.email` is UNIQUE and removal is a soft-delete, so a removed
+    // member's row still holds their email. Re-inviting them reactivates
+    // that row (same id, fresh role/inviter/join time) rather than
+    // inserting a second one. Their old API keys stay revoked.
+    if let Some(existing) = existing {
+        conn.execute(
+            "UPDATE members SET role = ?1, invited_by = ?2, joined_at = ?3, removed_at = NULL
+             WHERE id = ?4",
+            params![
+                role.as_str(),
+                invited_by.clone(),
+                joined_at,
+                existing.id.clone()
+            ],
+        )
+        .await?;
+        return Ok(Member {
+            role,
+            invited_by,
+            joined_at,
+            removed_at: None,
+            ..existing
+        });
+    }
+
     let member = Member {
         id: db::new_id(),
         email,
         role,
-        invited_by: invited_by.map(str::to_string),
-        joined_at: db::now(),
+        invited_by,
+        joined_at,
         removed_at: None,
     };
     conn.execute(
@@ -128,16 +156,23 @@ pub async fn remove(conn: &Connection, id: &str) -> Result<()> {
     if member.removed_at.is_some() {
         bail!("member {id} has already been removed");
     }
-    conn.execute(
+    // One transaction, so a failure between the two updates can't leave a
+    // removed member with keys that still authorize.
+    let now = db::now();
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    tx.execute(
         "UPDATE members SET removed_at = ?1 WHERE id = ?2",
-        params![db::now(), id.to_string()],
+        params![now, id.to_string()],
     )
     .await?;
-    conn.execute(
+    tx.execute(
         "UPDATE api_keys SET revoked_at = ?1 WHERE member_id = ?2 AND revoked_at IS NULL",
-        params![db::now(), id.to_string()],
+        params![now, id.to_string()],
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use libsql::{Connection, params};
+use libsql::{Connection, TransactionBehavior, params};
 use serde::Serialize;
 
 use crate::db;
@@ -73,13 +73,20 @@ pub async fn delete(conn: &Connection) -> Result<()> {
     let Some(org) = get(conn).await? else {
         bail!("no org exists yet — run `wardn init` first");
     };
-    conn.execute(
+    // All-or-nothing: if any delete fails (e.g. the database is busy), the
+    // transaction rolls back on drop instead of leaving keys deleted but
+    // members and the org still in place.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    tx.execute(
         "DELETE FROM api_keys WHERE member_id IN (SELECT id FROM members)",
         (),
     )
     .await?;
-    conn.execute("DELETE FROM members", ()).await?;
-    conn.execute("DELETE FROM org WHERE id = ?1", params![org.id])
+    tx.execute("DELETE FROM members", ()).await?;
+    tx.execute("DELETE FROM org WHERE id = ?1", params![org.id])
         .await?;
+    tx.commit().await?;
     Ok(())
 }

@@ -363,7 +363,12 @@ pub async fn cmd_status(db_path: &str) -> Result<()> {
     }
     println!("members: {}", members.len());
 
-    let listen_addr = config::default_listen_addr();
+    // An explicit $WARDN_LISTEN_ADDR wins (e.g. a hand-run `wardn serve`),
+    // then whatever address an installed service was baked with.
+    let listen_addr = std::env::var("WARDN_LISTEN_ADDR")
+        .ok()
+        .or_else(crate::service::installed_listen_addr)
+        .unwrap_or_else(config::default_listen_addr);
     println!("{}", serve_reachability_line(&listen_addr).await?);
     Ok(())
 }
@@ -406,9 +411,15 @@ pub async fn cmd_service(db_path: &str, command: ServiceCommand) -> Result<()> {
         ServiceCommand::Install { listen, no_linger } => {
             let exe = std::env::current_exe().context("locating the wardn binary")?;
             let listen = listen.unwrap_or_else(config::default_listen_addr);
+            // The service runs from a different working directory ($HOME
+            // under systemd, `/` under launchd), so a relative `--db` must
+            // be resolved against *this* shell's directory before it's
+            // baked in.
+            let db_path = std::path::absolute(db_path)
+                .with_context(|| format!("resolving database path {db_path}"))?;
             println!(
                 "{}",
-                crate::service::install(&exe, db_path, &listen, !no_linger)?
+                crate::service::install(&exe, &db_path.to_string_lossy(), &listen, !no_linger)?
             );
         }
         ServiceCommand::Uninstall => {
@@ -416,7 +427,8 @@ pub async fn cmd_service(db_path: &str, command: ServiceCommand) -> Result<()> {
         }
         ServiceCommand::Status => {
             println!("{}", crate::service::os_status()?);
-            let listen_addr = config::default_listen_addr();
+            let listen_addr =
+                crate::service::installed_listen_addr().unwrap_or_else(config::default_listen_addr);
             println!("{}", serve_reachability_line(&listen_addr).await?);
         }
     }
