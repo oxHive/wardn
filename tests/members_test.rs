@@ -146,3 +146,23 @@ async fn set_role_fails_for_an_unknown_id() {
         .unwrap_err();
     assert!(err.to_string().contains("no member"));
 }
+
+#[tokio::test]
+async fn a_removed_member_can_be_invited_again() {
+    let (_dir, db) = common::temp_db().await;
+    let original = members::invite(&db.conn, "back@example.com", Role::Member, None)
+        .await
+        .unwrap();
+    members::remove(&db.conn, &original.id).await.unwrap();
+
+    let again = members::invite(&db.conn, "Back@Example.com", Role::Admin, None)
+        .await
+        .unwrap();
+    assert_eq!(again.id, original.id);
+    assert_eq!(again.role, Role::Admin);
+    assert_eq!(again.removed_at, None);
+
+    let all = members::list(&db.conn).await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].role, Role::Admin);
+}
