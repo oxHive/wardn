@@ -81,6 +81,11 @@ pub mod observability {
     }
 }
 
+/// Serializes unit tests that set or depend on process environment
+/// variables — see `tests::wrapper_functions_read_the_real_process_environment`.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,14 +150,15 @@ mod tests {
     /// environment (`db_path`, `default_listen_addr`, and — under the
     /// "observability" feature — `metrics_token`/
     /// `otel_exporter_otlp_endpoint`/`loki_url`), as opposed to the pure
-    /// `resolve_*` functions above. This is deliberately the only test in
-    /// this crate that touches `WARDN_DB_PATH`/`WARDN_LISTEN_ADDR`/
-    /// `WARDN_METRICS_TOKEN`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`LOKI_URL` — env
-    /// vars are process-global, so mutating them safely requires either no
-    /// other test touching the same names (true here) or doing it all
-    /// sequentially within one test function (also true here).
+    /// `resolve_*` functions above. Env vars are process-global and unit
+    /// tests run in parallel threads, so this holds `ENV_LOCK` — the
+    /// `cli` tracing test reads `OTEL_EXPORTER_OTLP_ENDPOINT`/`LOKI_URL`
+    /// and must never observe the values set here.
     #[test]
     fn wrapper_functions_read_the_real_process_environment() {
+        let _env = super::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         unsafe {
             std::env::set_var("WARDN_DB_PATH", "/from-env/org.db");
         }

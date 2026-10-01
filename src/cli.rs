@@ -505,9 +505,14 @@ mod tests {
     /// called once per process, so this is deliberately the *only* test in
     /// this crate that calls `init_tracing` — every other test in this
     /// binary (`config`'s and `roles`' unit tests) leaves the global
-    /// subscriber alone.
+    /// subscriber alone. Holds `config::ENV_LOCK` so `config`'s env test
+    /// can't set `LOKI_URL` mid-call (which would make this spawn the Loki
+    /// task outside a Tokio runtime and panic).
     #[test]
     fn init_tracing_serve_mode_sets_up_the_registry_once() {
+        let _env = config::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         unsafe {
             std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
             std::env::remove_var("LOKI_URL");
