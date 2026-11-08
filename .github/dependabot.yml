@@ -9,6 +9,11 @@ updates:
       - dependencies
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+          - "tracing-opentelemetry"
 
   - package-ecosystem: github-actions
     directory: /
